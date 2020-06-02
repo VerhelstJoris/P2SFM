@@ -33,7 +33,7 @@
 
 
 #ignore the resource files
-P2SFM\P2SFM\DataSet\
+P2SFM/DataSet/
 
 
 ## Ignore Visual Studio temporary files, build results, and
