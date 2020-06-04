@@ -5,6 +5,7 @@
 
 
 #include "HelperFunctions.h"
+#include "P2SFM.h"
 
 /*Input:
 	* measurements : Original image coordinates(2FxN sparse matrix where missing data are[0; 0])
@@ -28,11 +29,15 @@ int main()
 	std::cout << *sizeInput << std::endl << std::endl;
 
 	//read in sparse matrix
-	MatrixSparse* measureSparse= new MatrixSparse();
-	Helper::ReadSparseMatrixFromMat(fileName, "measurements", measureSparse);
+	MatrixSparse* measureSparse = new MatrixSparse();
+	auto result = Helper::ReadSparseMatrixFromMat(fileName, "measurements", measureSparse);
 
 	std::cout << "Sparse matrix loaded in" << std::endl;
-	//std::cout << *measureSparse << std::endl;
+	std::cout << measureSparse->nonZeros() << std::endl;
+
+
+	//only 439 elements loaded in 
+	//632912 elements should be present in sparse matrix
 
 	//std::cout << mat1;
 
