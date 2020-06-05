@@ -67,25 +67,11 @@ namespace Helper
 		if (!mxIsSparse(matrixMat))
 		{
 			std::cout << "The variable loaded in the mxArray is not a sparse matrix" << std::endl;
-			//return false;
+			return false;
 		}
 
 		if (matrixMat != NULL && mxIsDouble(matrixMat) && !mxIsEmpty(matrixMat))
 		{
-
-			//mxAssert(mxGetClassID(mat) == mxDOUBLE_CLASS,
-			//	"Type of the input matrix isn't double");
-			//mwSize     m = mxGetM(mat);
-			//mwSize     n = mxGetN(mat);
-			//mwSize    nz = mxGetNzmax(mat);
-			///*Theoretically fails in very very large matrices*/
-			//mxAssert(nz <= std::numeric_limits< std::make_signed<mwIndex>::type>::max(),
-			//	"Unsupported Data size."
-			//);
-			//double  * pr = mxGetPr(mat);
-			
-			//Map<MatlabSparse> result(m, n, nz, jc, ir, pr);
-
 
 			double *pr = mxGetDoubles(matrixMat); //returns pointer to data array	//CORRECT
 
@@ -100,19 +86,12 @@ namespace Helper
 			
 			Eigen::Map<MatrixSparse> spMap(nrRows, nrCols, nnz, colIndex, rowIndex, pr,0);
 
-			std::cout << spMap.nonZeros() << std::endl; //632912
-			MatrixSparse spCopy = spMap;
-			std::cout << spCopy.nonZeros() << std::endl; //632912
-
-			//assignment is wrong
 			sparseMat->reserve(nnz);
-
 			*sparseMat = spMap;
 
-			std::cout << (*sparseMat).nonZeros() << std::endl; //439
 			return true;
 		}
 
-		//return false;
+		return false;
 	}
 }
