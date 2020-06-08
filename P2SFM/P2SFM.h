@@ -6,25 +6,93 @@
 typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> MatrixDynamicDense;
 typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixSparse;
 
-
 namespace P2SFM 
 {
-	enum Elimination_Method
+	//A class to deal efficiently with the pyramidal visibility score from "Structure-from-Motion Revisisted", Schonberger & Frahm, CVPR16.
+	struct PyramidalVisibilityScore
 	{
-		DLT,
-		PNV
-	};
+	public:
 
-	enum InformDebug
-	{
-		NONE,
-		REGULAR,
-		VERBOSE
+		//initialize eigen matrices in initializer list
+		PyramidalVisibilityScore(int width, int height, int level, int projs)
+			: width_range((int) (pow(2, level) + 1)), height_range((int)(pow(2, level) + 1)) ,width(width),height(height), level(level)
+		{
+			//WIDTH_RANGE
+
+			auto lambda = [](double current, double incrementAmount)mutable{ double val = current; current += incrementAmount; return val; };
+			width_range = MapRangeToRowVec(width / (pow(2, level)), (int)(pow(2, level) + 1)/*range of values INCLUDING 0*/, lambda);
+
+			//width_range = MapRangeToRowVec(width / (pow(2, level)), (int)(pow(2, level) + 1)/*range of values INCLUDING 0*/,
+			//[](double current, double incrementAmount)->double { double val = current; current += incrementAmount; return val;}
+			//);
+	
+			//HEIGHT_RANGE
+			//height_range = MapRangeToRowVec(height / (pow(2, level)), (int)(pow(2, level) + 1),
+			//	[](double current, double incrementAmount)->double{ double val = current; current += incrementAmount; return val; });
+
+			//DIM_RANGE
+			//dim_range = MapRangeToRowVec(1, level, [](double currentLvl, double value)->int{currentLvl--; return pow(2, currentLvl); }
+			//);
+		};
+
+		int GetLevel() { return level; };
+		int GetWidth() { return width; };
+		int GetHeight() { return height; };
+
+		void ComputeScore() { std::cout << width_range; };
+
+		//get the maximum score possible
+		void MaxScore()
+		{
+
+		};
+		void AddProjections();
+		void RemoveProjections();
+
+	private:
+		void CellVisible();
+
+		//create a range of values defined by the lambda and return as RowVectorXd
+		//OPTIMIZE?
+		Eigen::RowVectorXd MapRangeToRowVec(const double incrementAmount, const int valAmount, double(*lam)(double,double))
+		{
+			double current = 0.0;
+			std::vector<double> valVec(valAmount); 
+			std::generate(valVec.begin(), valVec.end(), (*lam)(current, incrementAmount));	//generate the range using the provided lambda
+			//std::generate(valVec.begin(), valVec.end(), [n = 0]() mutable { return n++; });	//generate the range using the provided lambda
+	
+			//std::generate(valVec.begin(), valVec.end(), 
+			//	[&current, &incrementAmount]() { double val = current; current += incrementAmount; return val; });
+
+			double* ptr = &valVec[0];
+			Eigen::Map<Eigen::RowVectorXd> w(ptr, pow(2, level) + 1);
+			return w;
+		}
+
+		int level = 0, width = 0, height = 0;
+
+		Eigen::RowVectorXd width_range, height_range, dim_range;
+
+		//int width_range = 0, height_range = 0, dim_range = 0;
+		//proj_count = [];
 	};
 
 	struct Options {
 		//default contructor for default param 
 		Options() {};
+
+		enum Elimination_Method
+		{
+			DLT,
+			PNV
+		};
+
+		enum InformDebug
+		{
+			NONE,
+			REGULAR,
+			VERBOSE
+		};
 
 		//General options
 		Elimination_Method elimination_method = Elimination_Method::DLT; // Method to use for eliminating the projective depths(DLT or PINV)
@@ -68,8 +136,7 @@ namespace P2SFM
 		int upgrade_threshold = 15; // Threshold used when increasing the test tolerance(20 seems reasonable, 100 maximum)
 
 		// Diagnosis options
-		//chang verbose/inform to a single enum??
-		InformDebug debuginform = InformDebug::REGULAR;
+		InformDebug debuginform = InformDebug::REGULAR; //NONE,REGULAR,VERBOSE
 		bool debug = false; // display everything possible, that's a lot of things
 		bool diagnosis = false; // display the graphical diagnosis
 		bool diagnosis_upgrade = false; // include the metric upgrade in graphical diagnosis(takes a lot of time !)
@@ -83,7 +150,7 @@ namespace P2SFM
 	Transform the original image coordinates into normalised homogeneous coordinates and various sparse matrices needed.
 	 Input:
       * orig_meas: Original image coordinates (2FxN sparse matrix where missing data are [0;0])
-      * options:  Structure containing options (must be initialized by ppsfm_options to contains all necessary fields)
+      * options:  Structure containing options, can be left blank for default values
      Output:
       * data: Matrix containing the data to compute the cost function (2Fx3N)
       * pinv_meas: Matrix containing the data for elimination of projective depths,
@@ -94,6 +161,12 @@ namespace P2SFM
       * img_meas: Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores (3FxN)*/
 	void PrepareData(MatrixSparse& measurements, const Options& options = Options())
 	{
-		std::cout << options.upgrade_threshold << std::endl;
+		//Points not visible enough will never be considered, removing them make data matrices smaller and computations more efficient
+
+	}
+
+	void EliminatePINV()
+	{
+
 	}
 }
