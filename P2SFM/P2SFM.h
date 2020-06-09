@@ -6,40 +6,60 @@
 typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> MatrixDynamicDense;
 typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixSparse;
 
+//vector Template
+template <typename Type> using Vector = Eigen::Matrix<Type, Eigen::Dynamic, 1>;
+
+
 namespace P2SFM 
 {
+	namespace Helper
+	{
+		template <typename T>
+		Vector<T> StdVecToRowVec(std::vector<T> vec)
+		{
+			T* ptr = &vec[0];
+			Eigen::Map<Vector<T>> map(ptr, vec.size());
+			return (Vector<T>)map;
+		}
+	}
+
+
 	//A class to deal efficiently with the pyramidal visibility score from "Structure-from-Motion Revisisted", Schonberger & Frahm, CVPR16.
 	struct PyramidalVisibilityScore
 	{
 	public:
 
 		//initialize eigen matrices in initializer list
+		//initialize a PVS, including width/height/dim_range 
 		PyramidalVisibilityScore(int width, int height, int level, int projs)
-			: width_range((int) (pow(2, level) + 1)), height_range((int)(pow(2, level) + 1)) ,width(width),height(height), level(level)
+			: width_range((int) (pow(2, level) + 1)), height_range((int)(pow(2, level) + 1)), dim_range(level), 
+			width(width),height(height), level(level)
 		{
 			//WIDTH_RANGE
-
-			auto lambda = [](double current, double incrementAmount)mutable{ double val = current; current += incrementAmount; return val; };
-			width_range = MapRangeToRowVec(width / (pow(2, level)), (int)(pow(2, level) + 1)/*range of values INCLUDING 0*/, lambda);
-
-			//width_range = MapRangeToRowVec(width / (pow(2, level)), (int)(pow(2, level) + 1)/*range of values INCLUDING 0*/,
-			//[](double current, double incrementAmount)->double { double val = current; current += incrementAmount; return val;}
-			//);
+			//filled with range from 0-incerementAmount*valAmount
+			width_range = MapRangeToRowVec(width / (pow(2, level)), (int)(pow(2, level) + 1));/*range of values INCLUDING 0*/
 	
 			//HEIGHT_RANGE
-			//height_range = MapRangeToRowVec(height / (pow(2, level)), (int)(pow(2, level) + 1),
-			//	[](double current, double incrementAmount)->double{ double val = current; current += incrementAmount; return val; });
+			//filled with range from 0-incerementAmount*valAmount
+			height_range = MapRangeToRowVec(height / (pow(2, level)), (int)(pow(2, level) + 1));
 
 			//DIM_RANGE
-			//dim_range = MapRangeToRowVec(1, level, [](double currentLvl, double value)->int{currentLvl--; return pow(2, currentLvl); }
-			//);
+			//filled with 2^(level-x)
+			int current = level;
+			std::vector<int> valVec(level);
+
+			std::generate(valVec.begin(), valVec.end(),
+				[&current]()->int {current--; return (int)pow(2, current); }
+			);
+			
+			dim_range = Helper::StdVecToRowVec(valVec);
 		};
 
 		int GetLevel() { return level; };
 		int GetWidth() { return width; };
 		int GetHeight() { return height; };
 
-		void ComputeScore() { std::cout << width_range; };
+		void ComputeScore() { std::cout << dim_range; };
 
 		//get the maximum score possible
 		void MaxScore()
@@ -52,28 +72,26 @@ namespace P2SFM
 	private:
 		void CellVisible();
 
-		//create a range of values defined by the lambda and return as RowVectorXd
-		//OPTIMIZE?
-		Eigen::RowVectorXd MapRangeToRowVec(const double incrementAmount, const int valAmount, double(*lam)(double,double))
+		template <typename T>
+		Vector<T> MapRangeToRowVec(const T incrementAmount, const int valAmount)
 		{
-			double current = 0.0;
-			std::vector<double> valVec(valAmount); 
-			std::generate(valVec.begin(), valVec.end(), (*lam)(current, incrementAmount));	//generate the range using the provided lambda
-			//std::generate(valVec.begin(), valVec.end(), [n = 0]() mutable { return n++; });	//generate the range using the provided lambda
-	
-			//std::generate(valVec.begin(), valVec.end(), 
-			//	[&current, &incrementAmount]() { double val = current; current += incrementAmount; return val; });
-
-			double* ptr = &valVec[0];
-			Eigen::Map<Eigen::RowVectorXd> w(ptr, pow(2, level) + 1);
-			return w;
+			T current=(T)0;
+			std::vector<T> valVec(valAmount);
+		
+			std::generate(valVec.begin(), valVec.end(),
+				[&current, &incrementAmount]() { T val = current; current += incrementAmount; return val; });
+		
+			return Helper::StdVecToRowVec(valVec);
 		}
 
 		int level = 0, width = 0, height = 0;
 
-		Eigen::RowVectorXd width_range, height_range, dim_range;
 
-		//int width_range = 0, height_range = 0, dim_range = 0;
+		Vector<double> width_range, height_range;
+		Vector<int> dim_range;
+		//Eigen::RowVectorXd width_range, height_range;
+		//Eigen::RowVectorXi dim_range;	//always a full number
+
 		//proj_count = [];
 	};
 
