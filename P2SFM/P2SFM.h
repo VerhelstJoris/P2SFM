@@ -12,7 +12,7 @@ template <typename Type> using Vector = Eigen::Matrix<Type, Eigen::Dynamic, 1>;
 
 namespace P2SFM 
 {
-	namespace Helper
+	namespace EigenHelpers
 	{
 		template <typename T>
 		Vector<T> StdVecToRowVec(std::vector<T> vec)
@@ -31,7 +31,8 @@ namespace P2SFM
 
 		//initialize eigen matrices in initializer list
 		//initialize a PVS, including width/height/dim_range 
-		PyramidalVisibilityScore(int width, int height, int level, int projs)
+		//projs should be a matrix consisting of 2 rows and an unspecified amount of cols, most likely a submatrix of a larger matrix
+		PyramidalVisibilityScore(int width, int height, int level, const MatrixDynamicDense& projs)
 			: width_range((int) (pow(2, level) + 1)), height_range((int)(pow(2, level) + 1)), dim_range(level), 
 			width(width),height(height), level(level)
 		{
@@ -52,7 +53,13 @@ namespace P2SFM
 				[&current]()->int {current--; return (int)pow(2, current); }
 			);
 			
-			dim_range = Helper::StdVecToRowVec(valVec);
+			dim_range = EigenHelpers::StdVecToRowVec(valVec);
+
+			//Projections
+			if (!AddProjections(projs))
+			{
+				std::cout << "PVS: Projs Dynamix matrix is empty" << std::endl;
+			}
 		};
 
 		int GetLevel() { return level; };
@@ -66,13 +73,74 @@ namespace P2SFM
 		{
 
 		};
-		void AddProjections();
+
+		//add projection to the pyramid
+		bool AddProjections(const MatrixDynamicDense& projs)
+		{
+			if (projs.cols() > 0)
+			{
+				CellVisible(projs);
+
+				return true;
+			}
+			
+			return false;
+		};
+
+
 		void RemoveProjections();
 
 	private:
-		void CellVisible();
+		//Compute the indexes of the cells where the projections are visibles
+		std::tuple<Eigen::ArrayXi, Eigen::ArrayXi> CellVisible(const MatrixDynamicDense &projs)
+		{
+			//Arrays filled with ones
+			//arrays as opposed to vectors as arrays are more general purpose
+			Eigen::ArrayXi idx_width = Eigen::ArrayXi::Ones(projs.cols());
+			Eigen::ArrayXi idx_height = Eigen::ArrayXi::Ones(projs.cols());
+
+			for (size_t i = 0; i < dim_range.size(); i++)
+			{
+				Eigen::ArrayXi idx_middle = idx_width + dim_range[i]; //middle of the cell
+
+
+				//possible replacement for current loop??
+				//idx_width(j) = ( projs(0, j) > width_range(idx_middle(j)) ).select( idx_middle(j), idx_width(j) );
+
+				//width
+				//loop through the arrayXi
+				for (size_t j = 0; j < projs.cols(); j++)
+				{
+					//idx_width(j) = ( projs(0, j) > width_range(idx_middle(j)) ).select( idx_middle(j), idx_width(j) );
+
+					//determine whether points are located to the right or left of idx_middle
+					if (projs(0, j) >= width_range(idx_middle(j)))
+					{
+						//'move' to the next cell for next lvl/iteration
+						idx_width(j) = idx_middle(j);
+					}
+				}
+				
+				//height
+				//reuse idx_middle
+				idx_middle = idx_height + dim_range[i]; //middle of the cell
+
+				for (size_t j = 0; j < projs.cols(); j++)
+				{
+					//idx_width(j) = ( projs(0, j) > width_range(idx_middle(j)) ).select( idx_middle(j), idx_width(j) );
+				
+					//first row instead of second 0 -> Y values
+					if (projs(1, j) >= width_range(idx_middle(j)))
+					{
+						idx_height(j) = idx_middle(j);
+					}
+				}
+			}
+			return std::make_tuple(idx_width, idx_height);
+		}
 
 		template <typename T>
+		//map a range from [0 - incrementAmount* valAmount] to an Vector<T> by first creating a std::vector<T> and generating the values in there
 		Vector<T> MapRangeToRowVec(const T incrementAmount, const int valAmount)
 		{
 			T current=(T)0;
@@ -81,16 +149,14 @@ namespace P2SFM
 			std::generate(valVec.begin(), valVec.end(),
 				[&current, &incrementAmount]() { T val = current; current += incrementAmount; return val; });
 		
-			return Helper::StdVecToRowVec(valVec);
+			return EigenHelpers::StdVecToRowVec(valVec);
 		}
 
 		int level = 0, width = 0, height = 0;
 
-
+		//'Vector' is a single row matrices typedef
 		Vector<double> width_range, height_range;
 		Vector<int> dim_range;
-		//Eigen::RowVectorXd width_range, height_range;
-		//Eigen::RowVectorXi dim_range;	//always a full number
 
 		//proj_count = [];
 	};
