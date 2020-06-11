@@ -11,7 +11,9 @@ template <typename Type> using MatrixDynamicDense = Eigen::Matrix<Type, Eigen::D
 typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixSparse;
 
 //vector Template
-template <typename Type> using Vector = Eigen::Matrix<Type, Eigen::Dynamic, 1>;
+template <typename Type> using Vector = Eigen::Matrix<Type,1, Eigen::Dynamic>;
+//array template
+template <typename Type> using Array = Eigen::Array<Type, 1, Eigen::Dynamic>;
 
 
 namespace P2SFM 
@@ -19,12 +21,28 @@ namespace P2SFM
 	namespace EigenHelpers
 	{
 		template <typename T>
-		Vector<T> StdVecToRowVec(std::vector<T> vec)
+		Vector<T> StdVecToEigenVec(std::vector<T> vec)
 		{
 			T* ptr = &vec[0];
 			Eigen::Map<Vector<T>> map(ptr, vec.size());
 			return (Vector<T>)map;
 		}
+
+		template <typename T>
+		Array<T> StdVecToEigenArray(std::vector<T> vec)
+		{
+			T* ptr = &vec[0];
+			Eigen::Map<Array<T>> map(ptr, vec.size());
+			return (Array<T>)map;
+		}
+
+		//template <typename T, typename VarType>
+		//VarType<T> StdVecToEigenArray(std::vector<T> vec, VarType type)
+		//{
+		//	T* ptr = &vec[0];
+		//	Eigen::Map<VarType<T>> map(ptr, vec.size());
+		//	return (VarType<T>)map;
+		//}
 	}
 
 
@@ -39,10 +57,14 @@ namespace P2SFM
 		PyramidalVisibilityScore(int width, int height, int level, const MatrixDynamicDense<double>& projs)
 			: width_range((int) (pow(2, level) + 1)),	//vector
 			height_range((int)(pow(2, level) + 1)),	//vector
-			dim_range(level),		//vecotr
-			proj_count((int)(pow(2,level)), (int)(pow(2, level))), //2 dimensional matrix
+			//dim_range(level),		//vector,
+			dim_range(level),
+			//proj_count((int)(pow(2,level)), (int)(pow(2, level))), //2 dimensional matrix
 			width(width),height(height), level(level)
 		{
+			//matrix is initialized here instead of constructor to be able to initialize with all zeros
+			proj_count = MatrixDynamicDense<uint32_t>::Zero((int)(pow(2, level)), (int)(pow(2, level)));
+
 			//WIDTH_RANGE
 			//filled with range from 0-incerementAmount*valAmount
 			width_range = MapRangeToRowVec(width / (pow(2, level)), (int)(pow(2, level) + 1));/*range of values INCLUDING 0*/
@@ -60,12 +82,10 @@ namespace P2SFM
 				[&current]()->int {current--; return (int)pow(2, current); }
 			);
 			
-			dim_range = EigenHelpers::StdVecToRowVec(valVec);
+			//dim_range = EigenHelpers::StdVecToEigenVec(valVec);
+			dim_range = EigenHelpers::StdVecToEigenArray(valVec);
 
 			//Projections
-			//PVS.proj_count = zeros(2 ^ PVS.level, 'uint32'); %max number of bins possible
-			std::cout << "SIZE PROJ_COUNT " << proj_count.rows() << " " << proj_count.cols() << std::endl;
-
 			if (!AddProjections(projs))
 			{
 				std::cout << "PVS: Projs Dynamix matrix is empty" << std::endl;
@@ -79,9 +99,16 @@ namespace P2SFM
 		void ComputeScore() { std::cout << dim_range; };
 
 		//get the maximum score possible
-		void MaxScore()
+		int MaxScore()
 		{
-
+			if (level > 0)
+			{
+				//score = sum(this.dim_range .* (this.dim_range * 2) . ^ 2);
+				//.* element-wise multiplication
+				//.^element wise power
+				return (dim_range * (dim_range * 2).pow(2)).sum();
+			}
+			return 0;
 		};
 
 		//add projection to the pyramid
@@ -91,20 +118,25 @@ namespace P2SFM
 			{
 				Eigen::ArrayXi idx_width, idx_height;
 
-				std::make_tuple(idx_width, idx_height)=CellVisible(projs);
+				std::tie(idx_width, idx_height)=CellVisible(projs);
+				//std::cout << idx_width;
 
 				//idx_width/idx_height have exact same dimensions
 				for (size_t i = 0; i < idx_width.size(); i++)
 				{
 					//this.proj_count(idx_height(i), idx_width(i)) = this.proj_count(idx_height(i), idx_width(i)) + 1;
 
+					//-1 to account for matlab indexing start at 1 while Eigen starts at 0
+					proj_count(idx_height(i), idx_width(i)) = proj_count(idx_height(i), idx_width(i))+1 ;
 				}
+
+				//std::cout << proj_count;
+
 				return true;
 			}
 			
 			return false;
 		};
-
 
 		void RemoveProjections();
 
@@ -113,9 +145,12 @@ namespace P2SFM
 		std::tuple<Eigen::ArrayXi, Eigen::ArrayXi> CellVisible(const MatrixDynamicDense<double> &projs)
 		{
 			//Arrays filled with ones
-			//arrays as opposed to vectors as arrays are more general purpose
-			Eigen::ArrayXi idx_width = Eigen::ArrayXi::Ones(projs.cols());
-			Eigen::ArrayXi idx_height = Eigen::ArrayXi::Ones(projs.cols());
+			//arrays as opposed to vectors as arrays are more general purpose and allow for more general arithmetic
+
+			//initilaze with 0's instead of 1's as we're working with indices
+			//indexing start in 0 with eigen but 1 with matlab
+			Eigen::ArrayXi idx_width = Eigen::ArrayXi::Zero(projs.cols());
+			Eigen::ArrayXi idx_height = Eigen::ArrayXi::Zero(projs.cols());
 
 			for (size_t i = 0; i < dim_range.size(); i++)
 			{
@@ -168,14 +203,15 @@ namespace P2SFM
 			std::generate(valVec.begin(), valVec.end(),
 				[&current, &incrementAmount]() { T val = current; current += incrementAmount; return val; });
 		
-			return EigenHelpers::StdVecToRowVec(valVec);
+			return EigenHelpers::StdVecToEigenVec(valVec);
 		}
 
 		int level = 0, width = 0, height = 0;
 
 		//'Vector' is a single row matrices typedef
 		Vector<double> width_range, height_range;
-		Vector<int> dim_range;
+		//array as opposed to matrix for better arithmetic options
+		Array<int> dim_range;
 
 		MatrixDynamicDense<uint32_t> proj_count;
 	};
