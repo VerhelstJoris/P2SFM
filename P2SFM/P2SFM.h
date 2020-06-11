@@ -5,10 +5,13 @@
 
 
 //typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> MatrixDynamicDense;
-//dynamix matrix template 
+//dynamic sized dense matrix template 
 template <typename Type> using MatrixDynamicDense = Eigen::Matrix<Type, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>;
 
-typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixSparse;
+//typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixSparse;
+//dynamic sized sparse matrix template
+template <typename Type> using MatrixSparse = Eigen::SparseMatrix<Type, Eigen::ColMajor, int64_t>;
+
 
 //vector Template
 template <typename Type> using Vector = Eigen::Matrix<Type,1, Eigen::Dynamic>;
@@ -59,12 +62,10 @@ namespace P2SFM
 			height_range((int)(pow(2, level) + 1)),	//vector
 			//dim_range(level),		//vector,
 			dim_range(level),
-			//proj_count((int)(pow(2,level)), (int)(pow(2, level))), //2 dimensional matrix
+			proj_count((int)(pow(2,level)), (int)(pow(2, level))), //2 dimensional SPARSE matrix with this amount of rows/cols
+			//probably a lot more than will ever be used
 			width(width),height(height), level(level)
 		{
-			//matrix is initialized here instead of constructor to be able to initialize with all zeros
-			proj_count = MatrixDynamicDense<uint32_t>::Zero((int)(pow(2, level)), (int)(pow(2, level)));
-
 			//WIDTH_RANGE
 			//filled with range from 0-incerementAmount*valAmount
 			width_range = MapRangeToRowVec(width / (pow(2, level)), (int)(pow(2, level) + 1));/*range of values INCLUDING 0*/
@@ -82,14 +83,15 @@ namespace P2SFM
 				[&current]()->int {current--; return (int)pow(2, current); }
 			);
 			
-			//dim_range = EigenHelpers::StdVecToEigenVec(valVec);
 			dim_range = EigenHelpers::StdVecToEigenArray(valVec);
 
-			//Projections
+			//PROJECTIONS
 			if (!AddProjections(projs))
 			{
 				std::cout << "PVS: Projs Dynamix matrix is empty" << std::endl;
 			}
+
+			std::cout << "succesfully created a PVS" << std::endl;
 		};
 
 		int GetLevel() { return level; };
@@ -119,18 +121,17 @@ namespace P2SFM
 				Eigen::ArrayXi idx_width, idx_height;
 
 				std::tie(idx_width, idx_height)=CellVisible(projs);
-				//std::cout << idx_width;
+
 
 				//idx_width/idx_height have exact same dimensions
 				for (size_t i = 0; i < idx_width.size(); i++)
 				{
-					//this.proj_count(idx_height(i), idx_width(i)) = this.proj_count(idx_height(i), idx_width(i)) + 1;
+					//proj_count(idx_height(i), idx_width(i)) = proj_count(idx_height(i), idx_width(i))+1 ; //legacy for dense matrix
 
-					//-1 to account for matlab indexing start at 1 while Eigen starts at 0
-					proj_count(idx_height(i), idx_width(i)) = proj_count(idx_height(i), idx_width(i))+1 ;
+					//cannot use tripletlist as using setFromTriplets would override all current values in proj_count
+					proj_count.coeffRef(idx_height(i), idx_width(i)) = proj_count.coeff(idx_height(i), idx_width(i)) +1;
 				}
 
-				//std::cout << proj_count;
 
 				return true;
 			}
@@ -138,7 +139,30 @@ namespace P2SFM
 			return false;
 		};
 
-		void RemoveProjections();
+		//remove projections from the pyramid
+		//functionally almost identical to AddProjections, removing 1 instead of adding it 
+		bool RemoveProjections(const MatrixDynamicDense<double>& projs)
+		{
+			if (projs.cols() > 0)
+			{
+				Eigen::ArrayXi idx_width, idx_height;
+
+				std::tie(idx_width, idx_height) = CellVisible(projs);
+
+				for (size_t i = 0; i < idx_width.size(); i++)
+				{
+					//proj_count(idx_height(i), idx_width(i)) = proj_count(idx_height(i), idx_width(i)) - 1; //legacy for dense matrix
+
+					//cannot use tripletlist as using setFromTriplets would override all current values in proj_count
+					proj_count.coeffRef(idx_height(i), idx_width(i)) = proj_count.coeff(idx_height(i), idx_width(i)) - 1;
+				}
+
+
+				return true;
+			}
+
+			return false;
+		}
 
 	private:
 		//Compute the indexes of the cells where the projections are visibles
@@ -189,12 +213,13 @@ namespace P2SFM
 				}
 			}
 
-			//these values are not altered so make_tuple instead of std::tie()
+			//these values are not/should not altered afterwards so std::make_tuple() instead of std::tie()
 			return std::make_tuple(idx_width, idx_height);
 		}
 
 		template <typename T>
-		//map a range from [0 - incrementAmount* valAmount] to an Vector<T> by first creating a std::vector<T> and generating the values in there
+		//map a range from [0 - incrementAmount* valAmount] to an Vector<T> by first creating a std::vector<T> 
+		//and generating the values in there
 		Vector<T> MapRangeToRowVec(const T incrementAmount, const int valAmount)
 		{
 			T current=(T)0;
@@ -210,10 +235,10 @@ namespace P2SFM
 
 		//'Vector' is a single row matrices typedef
 		Vector<double> width_range, height_range;
-		//array as opposed to matrix for better arithmetic options
+		//'Array' typedef as opposed to matrix for better arithmetic options
 		Array<int> dim_range;
-
-		MatrixDynamicDense<uint32_t> proj_count;
+		
+		MatrixSparse<uint32_t> proj_count;
 	};
 
 	struct Options {
@@ -298,14 +323,10 @@ namespace P2SFM
       * visible: Visibility matrix binary mask (FxN)
       * normalisations: Normalisation transformation for each camera stacked vertically (3Fx3)
       * img_meas: Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores (3FxN)*/
-	void PrepareData(MatrixSparse& measurements, const Options& options = Options())
+	void PrepareData(MatrixSparse<double>& measurements, const Options& options = Options())
 	{
 		//Points not visible enough will never be considered, removing them make data matrices smaller and computations more efficient
 
 	}
 
-	void EliminatePINV()
-	{
-
-	}
 }
