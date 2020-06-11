@@ -28,7 +28,7 @@ namespace Helper
 	}
 
 	//load in a named variable from a.MAT file into an mxArray, then load this mxArray into an Eigen Dense Matrix for use later
-	bool ReadDenseMatrixFromMat(const char *filePath, const char* varName,  MatrixDynamicDense* const mat)
+	bool ReadDenseMatrixFromMat(const char *filePath, const char* varName,  MatrixDynamicDense<double>* const mat)
 	{
 		mxArray* matrixMat = ReadMxArrayFromMat(filePath, varName);
 
@@ -47,7 +47,7 @@ namespace Helper
 			const int nrRows = mxGetNumberOfElements(matrixMat) / nrCols;
 
 			//possible map to supplied &mat directly??
-			Eigen::Map<MatrixDynamicDense> matrixEig(pr, nrRows, nrCols);
+			Eigen::Map<MatrixDynamicDense<double>> matrixEig(pr, nrRows, nrCols);
 			*mat = matrixEig;
 
 			return true;

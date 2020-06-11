@@ -3,7 +3,11 @@
 #include <Eigen/Sparse>
 #include <Eigen/Dense>
 
-typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> MatrixDynamicDense;
+
+//typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> MatrixDynamicDense;
+//dynamix matrix template 
+template <typename Type> using MatrixDynamicDense = Eigen::Matrix<Type, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>;
+
 typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixSparse;
 
 //vector Template
@@ -32,8 +36,11 @@ namespace P2SFM
 		//initialize eigen matrices in initializer list
 		//initialize a PVS, including width/height/dim_range 
 		//projs should be a matrix consisting of 2 rows and an unspecified amount of cols, most likely a submatrix of a larger matrix
-		PyramidalVisibilityScore(int width, int height, int level, const MatrixDynamicDense& projs)
-			: width_range((int) (pow(2, level) + 1)), height_range((int)(pow(2, level) + 1)), dim_range(level), 
+		PyramidalVisibilityScore(int width, int height, int level, const MatrixDynamicDense<double>& projs)
+			: width_range((int) (pow(2, level) + 1)),	//vector
+			height_range((int)(pow(2, level) + 1)),	//vector
+			dim_range(level),		//vecotr
+			proj_count((int)(pow(2,level)), (int)(pow(2, level))), //2 dimensional matrix
 			width(width),height(height), level(level)
 		{
 			//WIDTH_RANGE
@@ -56,6 +63,9 @@ namespace P2SFM
 			dim_range = EigenHelpers::StdVecToRowVec(valVec);
 
 			//Projections
+			//PVS.proj_count = zeros(2 ^ PVS.level, 'uint32'); %max number of bins possible
+			std::cout << "SIZE PROJ_COUNT " << proj_count.rows() << " " << proj_count.cols() << std::endl;
+
 			if (!AddProjections(projs))
 			{
 				std::cout << "PVS: Projs Dynamix matrix is empty" << std::endl;
@@ -75,12 +85,20 @@ namespace P2SFM
 		};
 
 		//add projection to the pyramid
-		bool AddProjections(const MatrixDynamicDense& projs)
+		bool AddProjections(const MatrixDynamicDense<double>& projs)
 		{
 			if (projs.cols() > 0)
 			{
-				CellVisible(projs);
+				Eigen::ArrayXi idx_width, idx_height;
 
+				std::make_tuple(idx_width, idx_height)=CellVisible(projs);
+
+				//idx_width/idx_height have exact same dimensions
+				for (size_t i = 0; i < idx_width.size(); i++)
+				{
+					//this.proj_count(idx_height(i), idx_width(i)) = this.proj_count(idx_height(i), idx_width(i)) + 1;
+
+				}
 				return true;
 			}
 			
@@ -92,7 +110,7 @@ namespace P2SFM
 
 	private:
 		//Compute the indexes of the cells where the projections are visibles
-		std::tuple<Eigen::ArrayXi, Eigen::ArrayXi> CellVisible(const MatrixDynamicDense &projs)
+		std::tuple<Eigen::ArrayXi, Eigen::ArrayXi> CellVisible(const MatrixDynamicDense<double> &projs)
 		{
 			//Arrays filled with ones
 			//arrays as opposed to vectors as arrays are more general purpose
@@ -102,7 +120,6 @@ namespace P2SFM
 			for (size_t i = 0; i < dim_range.size(); i++)
 			{
 				Eigen::ArrayXi idx_middle = idx_width + dim_range[i]; //middle of the cell
-
 
 				//possible replacement for current loop??
 				//idx_width(j) = ( projs(0, j) > width_range(idx_middle(j)) ).select( idx_middle(j), idx_width(j) );
@@ -136,6 +153,8 @@ namespace P2SFM
 					}
 				}
 			}
+
+			//these values are not altered so make_tuple instead of std::tie()
 			return std::make_tuple(idx_width, idx_height);
 		}
 
@@ -158,7 +177,7 @@ namespace P2SFM
 		Vector<double> width_range, height_range;
 		Vector<int> dim_range;
 
-		//proj_count = [];
+		MatrixDynamicDense<uint32_t> proj_count;
 	};
 
 	struct Options {
