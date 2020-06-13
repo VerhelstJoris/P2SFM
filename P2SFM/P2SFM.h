@@ -3,6 +3,7 @@
 #include <Eigen/Sparse>
 #include <Eigen/Dense>
 
+#include <algorithm>
 
 //typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> MatrixDynamicDense;
 //dynamic sized dense matrix template 
@@ -11,7 +12,6 @@ template <typename Type> using MatrixDynamicDense = Eigen::Matrix<Type, Eigen::D
 //typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixSparse;
 //dynamic sized sparse matrix template
 template <typename Type> using MatrixSparse = Eigen::SparseMatrix<Type, Eigen::ColMajor, int64_t>;
-
 
 //vector Template
 template <typename Type> using Vector = Eigen::Matrix<Type,1, Eigen::Dynamic>;
@@ -23,6 +23,17 @@ namespace P2SFM
 {
 	namespace EigenHelpers
 	{
+
+		bool PointComparison(const Eigen::Vector2i& p1, const Eigen::Vector2i& p2) {
+			if (p1[0] < p2[0]) { return true; }
+			if (p1[0] > p2[0]) { return false; }
+			return (p1[0] < p2[0]);
+		}
+
+		bool PointEquality(const Eigen::Vector2i& p1, const Eigen::Vector2i& p2) {
+			return ((p1[0] == p2[0]) && (p1[1] == p2[1]));
+		}
+
 		template <typename T>
 		Vector<T> StdVecToEigenVec(std::vector<T> vec)
 		{
@@ -60,8 +71,7 @@ namespace P2SFM
 		PyramidalVisibilityScore(int width, int height, int level, const MatrixDynamicDense<double>& projs)
 			: width_range((int) (pow(2, level) + 1)),	//vector
 			height_range((int)(pow(2, level) + 1)),	//vector
-			//dim_range(level),		//vector,
-			dim_range(level),
+			dim_range(level),	//array
 			proj_count((int)(pow(2,level)), (int)(pow(2, level))), //2 dimensional SPARSE matrix with this amount of rows/cols
 			//probably a lot more than will ever be used
 			width(width),height(height), level(level)
@@ -98,7 +108,85 @@ namespace P2SFM
 		int GetWidth() { return width; };
 		int GetHeight() { return height; };
 
-		void ComputeScore() { std::cout << dim_range; };
+		//Compute the pyramidal visibility score of the current projections, normalized by the maximum score if required
+		int ComputeScore(bool normalizeScore = false) 
+		{
+			int score = 0;
+
+			//level is at least one and at least 1 nnz in proj_count
+			if (level > 0 && proj_count.nonZeros()!=0)
+			{
+				//DEBUG
+				//=========================================
+				//insert elements
+				proj_count.coeffRef(2, 4) = -20;
+				proj_count.coeffRef(4, 4) = -15;
+				proj_count.coeffRef(3, 4) = -15;
+
+				//get logical matrix saying whether or not 
+				MatrixSparse<int32_t> visible(proj_count);
+
+				//lambda because default prune looks at absolute values of val
+				//essentially create a 'logical' matrix, with all existing values being 1
+				visible.prune([](int64_t, int64_t, const int32_t& val) {  
+					if (val >= 0)
+					{
+						return 1;
+					}
+					});
+
+
+				//is there a valid reason to keep proj_count around afterwards??
+				//maybe perform prune() on proj_count directly instead of a copy?
+
+				std::vector<Eigen::Vector2i> indices;
+
+				//get all indices of points in visible
+				for (int k = 0; k < visible.outerSize(); ++k)
+				{
+					for (MatrixSparse<int32_t>::InnerIterator it(visible, k); it; ++it)
+					{
+						indices.push_back(Eigen::Vector2i(it.row(), it.col()));
+					}
+				}
+
+				for (size_t i = 0; i < dim_range.size(); i++)
+				{
+					score += indices.size() * dim_range(i);
+
+					//original matlab code re-created a new matrix of half the size at every iteration
+					//instead simply work with the list of indices
+
+					//DEBUG
+					for (size_t i = 0; i < indices.size(); i++)
+					{
+						//indices list
+						std::cout << " [" << indices[i][0] << ", " << indices[i][1] << "] ";
+					}
+					std::cout << std::endl;
+
+
+					for (size_t j = 0; j < indices.size(); j++)
+					{
+						indices[j] = Eigen::Vector2i(
+							((indices[j][0] / (2*(i+1))) /*% (2 * (i + 1)) */),
+							((indices[j][1] / (2*(i+1))) /*% (2 * (i + 1)) */)
+							);
+					}
+
+					std::sort(indices.begin(), indices.end(), EigenHelpers::PointComparison);
+					indices.erase(std::unique(indices.begin(), indices.end(), EigenHelpers::PointEquality), indices.end());
+
+				}
+
+				if (normalizeScore)
+				{
+					score /= MaxScore();
+				}
+			}
+
+			return score;
+		};
 
 		//get the maximum score possible
 		int MaxScore()
@@ -238,7 +326,7 @@ namespace P2SFM
 		//'Array' typedef as opposed to matrix for better arithmetic options
 		Array<int> dim_range;
 		
-		MatrixSparse<uint32_t> proj_count;
+		MatrixSparse<int32_t> proj_count;
 	};
 
 	struct Options {
