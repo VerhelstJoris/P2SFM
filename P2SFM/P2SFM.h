@@ -152,8 +152,8 @@ namespace P2SFM
 					for (size_t j = 0; j < indices.size(); j++)
 					{
 						indices[j] = Eigen::Vector2i(
-							((indices[j][0] / (2*(i+1))) /*% (2 * (i + 1)) */), //uncommented is unnecessary as the conversion to int takes care of it
-							((indices[j][1] / (2*(i+1))) /*% (2 * (i + 1)) */)
+							((indices[j][0] / 2) /*% (2 * (i + 1)) */), //uncommented is unnecessary as the conversion to int takes care of it
+							((indices[j][1] / 2 )/*% (2 * (i + 1)) */)
 							);
 					}
 
