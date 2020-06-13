@@ -116,13 +116,6 @@ namespace P2SFM
 			//level is at least one and at least 1 nnz in proj_count
 			if (level > 0 && proj_count.nonZeros()!=0)
 			{
-				//DEBUG
-				//=========================================
-				//insert elements
-				proj_count.coeffRef(2, 4) = -20;
-				proj_count.coeffRef(4, 4) = -15;
-				proj_count.coeffRef(3, 4) = -15;
-
 				//get logical matrix saying whether or not 
 				MatrixSparse<int32_t> visible(proj_count);
 
@@ -134,7 +127,6 @@ namespace P2SFM
 						return 1;
 					}
 					});
-
 
 				//is there a valid reason to keep proj_count around afterwards??
 				//maybe perform prune() on proj_count directly instead of a copy?
@@ -157,19 +149,10 @@ namespace P2SFM
 					//original matlab code re-created a new matrix of half the size at every iteration
 					//instead simply work with the list of indices
 
-					//DEBUG
-					for (size_t i = 0; i < indices.size(); i++)
-					{
-						//indices list
-						std::cout << " [" << indices[i][0] << ", " << indices[i][1] << "] ";
-					}
-					std::cout << std::endl;
-
-
 					for (size_t j = 0; j < indices.size(); j++)
 					{
 						indices[j] = Eigen::Vector2i(
-							((indices[j][0] / (2*(i+1))) /*% (2 * (i + 1)) */),
+							((indices[j][0] / (2*(i+1))) /*% (2 * (i + 1)) */), //uncommented is unnecessary as the conversion to int takes care of it
 							((indices[j][1] / (2*(i+1))) /*% (2 * (i + 1)) */)
 							);
 					}
