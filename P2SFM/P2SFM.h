@@ -59,6 +59,40 @@ namespace P2SFM
 		//}
 	}
 
+	namespace AlgebraHelpers
+	{
+		//replace with a more solid implementation
+		long int Factorial(long int n)
+		{
+			// single line to find factorial 
+			return (n == 1 || n == 0) ? 1 : n * Factorial(n - 1);
+		}
+
+		// binomial coefficient: This is the number of combinations of n items taken k at a time. n and k must be nonnegative integers.
+		long int BinomialCoeff(const int n, const int k)
+		{
+			//nice little overflow up your ass
+			return (Factorial(n) / (Factorial(n - k) * Factorial(k)));
+		}
+
+		/*Find a transformation to normalize some data points,
+			%   made of a translation so that the origin is the centroid,
+			%   and a rescaling so that the average distance to it is sqrt(2).
+			%
+			%   Input:
+		     * points, the data points, if all the entries of the last row are ones, it is assumed it is homogeneous.
+			%     * isotropic, boolean indicating if the scaling should be isotropic(default) or not.
+			%   Output :
+			%     * trans, the transformation applied.
+			%     * points, the new data points coordinates.
+		*/
+		void NormTrans( bool isotropic=true)
+		{
+
+		}
+
+	}
+
 
 	//A class to deal efficiently with the pyramidal visibility score from "Structure-from-Motion Revisisted", Schonberger & Frahm, CVPR16.
 	struct PyramidalVisibilityScore
@@ -152,14 +186,14 @@ namespace P2SFM
 					for (size_t j = 0; j < indices.size(); j++)
 					{
 						indices[j] = Eigen::Vector2i(
-							((indices[j][0] / 2) /*% (2 * (i + 1)) */), //uncommented is unnecessary as the conversion to int takes care of it
-							((indices[j][1] / 2 )/*% (2 * (i + 1)) */)
+							((indices[j][0] / 2) ),
+							((indices[j][1] / 2) )
 							);
 					}
 
+					//sort and erase duplicates
 					std::sort(indices.begin(), indices.end(), EigenHelpers::PointComparison);
 					indices.erase(std::unique(indices.begin(), indices.end(), EigenHelpers::PointEquality), indices.end());
-
 				}
 
 				if (normalizeScore)
@@ -380,7 +414,6 @@ namespace P2SFM
 		bool diagnosis_save = false; // false = no save, a text string = template to save to(must have a %d field)
 		bool diagnosis_cameras = false; // display the cameras in the 3D model
 	};
-
 	/*
 	Transform the original image coordinates into normalised homogeneous coordinates and various sparse matrices needed.
 	 Input:
@@ -391,13 +424,105 @@ namespace P2SFM
       * pinv_meas: Matrix containing the data for elimination of projective depths,
 	    cross-product matrix or pseudo-inverse of the of the normalized homogeneous coordinates (Fx3N)
       * norm_meas: Normalized homogeneous projections coordinates (2FxN sparse matrix where missing data are [0;0])
-      * visible: Visibility matrix binary mask (FxN)
+      * visible: Visibility DENSE matrix binary mask (FxN)
       * normalisations: Normalisation transformation for each camera stacked vertically (3Fx3)
       * img_meas: Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores (3FxN)*/
-	void PrepareData(MatrixSparse<double>& measurements, const Options& options = Options())
+	template <typename MatrixType, typename IndexType>
+	//void PrepareData(MatrixSparse<double>& measurements, const Options& options = Options())
+	void PrepareData(Eigen::SparseMatrix<MatrixType,0, IndexType>& measurements, const Options& options = Options())
 	{
 		//Points not visible enough will never be considered, removing them make data matrices smaller and computations more efficient
+		const int optionsVal = options.eligibility_point[options.max_level_points];
+
+		//create visibility matrix initialized to false
+		MatrixDynamicDense<bool> visibility(measurements.rows()/2, measurements.cols());
+		visibility.fill(false);
+
+		//[x,y] -> [x,y,1]
+		std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
+		tripletList.reserve(measurements.nonZeros() / 2);
+
+		IndexType prevCol = 0, prevRow = 0;
+		double prevVal = 0.0;
+		for (int k = 0; k < measurements.outerSize(); ++k)
+		{
+			for (MatrixSparse<double>::InnerIterator it(measurements, k); it; ++it)
+			{
+
+				//chance of data having an x or y equal to 0 is very slim but not impossible
+				//std::cout << "row: " << prevRow << " | " << it.row() << " col: " << prevCol << " | " << it.col() << std::endl;
+				//std::cout << it.index() << " ";
+				if (prevRow + 1 == it.row() && prevCol == it.col() && it.index() % 2 == 1)
+				{
+					if ((it.value() + prevVal) > 4)
+					{			
+						visibility.coeffRef(it.row() / 2, it.col()) = true;	//replace with triplet
+						//[x,y] -> [x,y,1] affine to homogenous
+						tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(prevRow + (prevRow / 2), prevCol, prevVal)); //prev it value
+						tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(it.row() + (it.row() / 2), it.col(), it.value())); //current it
+						tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(it.row() + (it.row() / 2) + 1, it.col(), 1)); //homogenous value (=1)
+					}
+				}
+
+				prevCol = it.col();
+				prevRow = it.row();
+				prevVal = it.value();
+			}
+		}
+
+		//testMat.uncompress();
+		measurements.reserve(tripletList.size());
+		measurements.resize(measurements.rows() + (measurements.rows() / 2), measurements.cols());
+		measurements.setFromTriplets(tripletList.begin(), tripletList.end());
+
+		const int numVisible = measurements.nonZeros();
+		const int numViews = measurements.rows();
+		const int numPoints = measurements.cols();
+
+		Eigen::SparseMatrix<MatrixType,0,IndexType> norm_meas(3 * numViews, numPoints);
+		norm_meas.reserve(numVisible);	//copy constructor does not also allocate size for norm_meas
+	}
+
+	void EliminateDLT()
+	{
 
 	}
 
+	void EliminatePINV(const MatrixSparse<double>& meas)
+	{
+		//.array only works on dense matrix
+		//auto copy(meas);
+		//copy.makeCompressed();
+		//Eigen::Map<Array<double>> sparseArr(copy.valuePtr(), copy.nonZeros());
+		//auto data = copy.transpose() / ((sparseArr.array().pow(2)).sum());
+	}
+
+
+	void PairsAffinity(MatrixSparse<double>& measurements, const MatrixSparse<bool>& visible, const Eigen::Vector2i& img_size, const Options& options = Options())
+	{
+		const int numViews = visible.rows();
+
+		const int num_pairs = AlgebraHelpers::BinomialCoeff(numViews, 2);	//how many combinations of views are there?
+
+		//every view is matched against al subsequent views
+		//-1 to prevent matching last view against nothing
+		for (size_t i = 0; i < numViews-1; i++)
+		{
+			auto firstView = measurements.row(i);
+
+			for (size_t j = i+1; j < numViews; j++)
+			{
+				//match common points i-th and j-th row 'visible'/'measurements'
+				//matlab code looks in the logical matrix
+			
+				//here we can check if both rows have entries at all to corresponding points
+				auto secondView = measurements.row(j);
+
+				//get array of matching indices in first/secondview
+			
+			}
+		}
+
+	
+	}
 }
