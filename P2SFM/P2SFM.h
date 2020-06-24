@@ -76,18 +76,159 @@ namespace P2SFM
 		}
 
 		/*Find a transformation to normalize some data points,
-			%   made of a translation so that the origin is the centroid,
-			%   and a rescaling so that the average distance to it is sqrt(2).
-			%
-			%   Input:
-		     * points, the data points, if all the entries of the last row are ones, it is assumed it is homogeneous.
-			%     * isotropic, boolean indicating if the scaling should be isotropic(default) or not.
-			%   Output :
-			%     * trans, the transformation applied.
-			%     * points, the new data points coordinates.
+		  made of a translation so that the origin is the centroid,
+		  and a rescaling so that the average distance to it is sqrt(2).
+		  Input:
+		    * copy of points, the data points, if all the entries of every 3rd row are ones, it is assumed it is homogeneous.
+		    * isotropic, boolean indicating if the scaling should be isotropic(default) or not.
+		  Output :
+		    * trans, the transformation applied.
+		    * points, the new data points coordinates.
 		*/
-		void NormTrans( bool isotropic=true)
+		template <typename MatrixType, typename IndexType>
+		void NormTrans(const Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& subMat, bool isotropic = true)
 		{
+
+			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> copyMat(subMat);
+			copyMat.makeCompressed();
+
+			IndexType dimensions = subMat.rows();
+
+			//create array 
+			Array<double> tempArr(dimensions); //temporary to store differences/centroids
+			Array<double> pointsPerDimension(dimensions);
+			//each view has its own scale
+			tempArr.setZero();
+			pointsPerDimension.setZero();
+			Array<double> scaleArr(dimensions);
+			scaleArr.setZero();
+
+
+			Array<bool> homogenous( (dimensions-1)/3 +1);	//size of amount of entries/3
+			if (subMat.rows() % 3 == 0)	//can be homogenous
+				homogenous.setOnes();
+			else 				//amount of rows is borked, no guarantee the rows of this matrix follow the format for homogenous coords [x,y,1]
+				homogenous.setZero();
+
+			//check if every value in the last row in subMat is ==1
+			//cannot access a single row as we are in a colMajor format
+			for (int k = 0; k < subMat.outerSize(); ++k)
+			{
+				for (MatrixSparse<double>::InnerIterator it(subMat, k); it; ++it)
+				{
+					tempArr[it.row()] += it.value();
+					pointsPerDimension[it.row()]++;
+
+					//every value in a 3rd row should have it's value be ==1 for the matrix to be homogenous already
+					if ((it.row()+1) % 3 == 0 && it.value() != (MatrixType)1)
+						homogenous[it.row() / 3] = false;
+					
+				}
+			}
+
+			////element-wise division of tempArr/pointsPerDimension to calculate mean value per row
+			////every third element should have a value of 1 of the entire submat is homogenous
+			tempArr /= pointsPerDimension;
+			std::vector<Eigen::Triplet<MatrixType,IndexType>> tripletList;
+			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> scaleMatrix(3, dimensions);
+			scaleMatrix.reserve((3 * dimensions) / 9 * 5);
+			tripletList.reserve((3 * dimensions) / 9 * 5);	//exact amount of elements
+
+			if (isotropic)
+			{
+				std::cout << "ISOTROPIC TEST" << std::endl;
+				//scaleArr.resize(dimensions / 3); //one value per view
+
+				//SUM OF COL (matching x/y value) ,leave out third col if homogenous
+				//scale = sqrt(2) . / mean(sqrt(sum(diff. ^ 2, 1)));
+				// mean every row(sqrt(sum per row(element wise power for every value in diff)))
+				for (int k = 0; k < copyMat.outerSize(); ++k)
+				{
+					for (MatrixSparse<double>::InnerIterator it(copyMat, k); it; ++it)
+					{
+						auto prevVal = it.value();
+						++it;
+						std::cout << "DIFF: "  << pow(it.value() - tempArr[it.row()], 2) + pow(prevVal - tempArr[it.row() - 1], 2) << std::endl;
+						scaleArr[it.row()/3] += (sqrt(pow(it.value() - tempArr[it.row()],2) + pow(prevVal - tempArr[it.row() - 1],2)))/pointsPerDimension[it.row()] ;
+						++it;	//skip over third row
+					}
+				}
+
+				scaleArr = sqrt(2) / scaleArr;
+				std::cout << "SCALE: " << scaleArr << std::endl;
+
+				//create matrix containing transformations for a single view (3 rows)
+				// scale	   0		-centroid.x *  scale
+				//	 0		scale		-centroid.y *  scale
+				//	 0		   0					1
+				//then apply this matrix to the relevant view for a final 'normalized matrix'
+				for (size_t i = 0; i < scaleArr.size(); i += 3)	//rework indexing
+				{
+
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(0, i, scaleArr[i/3])); //x-scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(1, i + 1, scaleArr[i/3])); //y-scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(2, i + 2, (MatrixType)1)); //1
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(0, i + 2, -tempArr[i] * scaleArr[i/3]));
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(1, i + 2, -tempArr[i] * scaleArr[i/3]));
+				}
+
+				scaleMatrix.setFromTriplets(tripletList.begin(), tripletList.end());
+
+
+				std::cout << "SCALED: " << std::endl;
+				std::cout << scaleMatrix << std::endl;
+			}
+			else
+			{
+				std::cout << "NON-ISOTROPIC TEST" << std::endl;
+
+
+				for (int k = 0; k < copyMat.outerSize(); ++k)
+				{
+					for (MatrixSparse<double>::InnerIterator it(copyMat, k); it; ++it)
+					{
+						scaleArr[it.row()] += abs(it.value() - tempArr[it.row()]);	//can this be moved to the earlier iteration??
+						//problem being the fact it needs to be the absolute value
+					}
+				}
+		
+
+				//calculate the mean of the abs values, per ROW
+				scaleArr = sqrt(2) / (scaleArr/pointsPerDimension);
+
+				std::cout << "SCALE: " << scaleArr.size() << std::endl;
+
+				//create matrix containing transformations for a single view (3 rows)
+				// x-scale	   0		-centroid.x * x scale
+				//	 0		y-scale		-centroid.y * y scale
+				//	 0		   0					1
+				//then apply this matrix to the relevant view for a final 'normalized matrix'
+				for (size_t i = 0; i < scaleArr.size() ; i+=3)	//rework indexing
+				{
+					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i , 0, scaleArr[i])); //x-scale
+					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i +1, 1, scaleArr[i+1])); //y-scale
+					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i +2, 2, (MatrixType)1)); //1
+					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i, 2, -tempArr[i] * scaleArr.coeffRef(i) )); //-centroid.x * x scale
+					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i +1, 2, -tempArr[i + 1] * scaleArr.coeffRef(i + 1) )); //-centroid.y * y scale
+
+
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(0, i, scaleArr[i])); //x-scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(1, i+1, scaleArr[i + 1])); //y-scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(2, i+2, (MatrixType)1)); //1
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(0, i+2, -tempArr[i] * scaleArr[i])); //-centroid.x * x scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(1, i+2, -tempArr[i + 1] * scaleArr[i+1])); //-centroid.y * y scale
+				}
+
+				scaleMatrix.setFromTriplets(tripletList.begin(), tripletList.end());
+
+				std::cout << "SCALED: " << std::endl;
+				std::cout << scaleMatrix << std::endl;
+
+				//std::cout << "LEFT DIMENSIONS: [" << subMat.rows() << ", " << subMat.cols() << "] RIGHT DIMENSONS: [" << scaleMatrix.rows() << ", " << scaleMatrix.cols() << "]" << std::endl;
+
+				//copyMat = scaleMatrix * subMat;
+				//std::cout << copyMat << std::endl;
+			}
 
 		}
 
@@ -429,7 +570,7 @@ namespace P2SFM
       * img_meas: Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores (3FxN)*/
 	template <typename MatrixType, typename IndexType>
 	//void PrepareData(MatrixSparse<double>& measurements, const Options& options = Options())
-	void PrepareData(Eigen::SparseMatrix<MatrixType,0, IndexType>& measurements, const Options& options = Options())
+	void PrepareData(Eigen::SparseMatrix<MatrixType,Eigen::ColMajor, IndexType>& measurements, const Options& options = Options())
 	{
 		//Points not visible enough will never be considered, removing them make data matrices smaller and computations more efficient
 		const int optionsVal = options.eligibility_point[options.max_level_points];
@@ -443,7 +584,7 @@ namespace P2SFM
 		tripletList.reserve(measurements.nonZeros() / 2);
 
 		IndexType prevCol = 0, prevRow = 0;
-		double prevVal = 0.0;
+		MatrixType prevVal = (MatrixType)0;
 		for (int k = 0; k < measurements.outerSize(); ++k)
 		{
 			for (MatrixSparse<double>::InnerIterator it(measurements, k); it; ++it)
@@ -452,16 +593,30 @@ namespace P2SFM
 				//chance of data having an x or y equal to 0 is very slim but not impossible
 				//std::cout << "row: " << prevRow << " | " << it.row() << " col: " << prevCol << " | " << it.col() << std::endl;
 				//std::cout << it.index() << " ";
-				if (prevRow + 1 == it.row() && prevCol == it.col() && it.index() % 2 == 1)
+				if (prevRow + 1 == it.row() && prevCol == it.col() )
 				{
-					if ((it.value() + prevVal) > 4)
+					if ((it.value() + prevVal) > optionsVal)
 					{			
 						visibility.coeffRef(it.row() / 2, it.col()) = true;	//replace with triplet
 						//[x,y] -> [x,y,1] affine to homogenous
 						tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(prevRow + (prevRow / 2), prevCol, prevVal)); //prev it value
 						tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(it.row() + (it.row() / 2), it.col(), it.value())); //current it
 						tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(it.row() + (it.row() / 2) + 1, it.col(), 1)); //homogenous value (=1)
+						++it;
 					}
+				}
+				else 	//in case a a data entry only has an x or y value, not both
+				{	
+					//if (prevVal > optionsVal)
+					//{
+					//	std::cout << "PREV: " << prevRow << ", " << prevCol << ": " << prevVal << std::endl;
+					//	std::cout << "NEXT: " << it.row() << ", " << it.col() << ": " << it.value() << std::endl;
+					//
+					//	visibility.coeffRef(prevRow / 2, prevCol) = true;	
+					//	tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(prevRow + (prevRow / 2), prevCol, prevVal)); //prev it value
+					//	tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(prevRow + (prevRow / 2) + (2- prevRow%2), it.col(), 1)); //homogenous value (=1)
+					//
+					//}
 				}
 
 				prevCol = it.col();
@@ -470,7 +625,6 @@ namespace P2SFM
 			}
 		}
 
-		//testMat.uncompress();
 		measurements.reserve(tripletList.size());
 		measurements.resize(measurements.rows() + (measurements.rows() / 2), measurements.cols());
 		measurements.setFromTriplets(tripletList.begin(), tripletList.end());
@@ -479,8 +633,19 @@ namespace P2SFM
 		const int numViews = measurements.rows();
 		const int numPoints = measurements.cols();
 
-		Eigen::SparseMatrix<MatrixType,0,IndexType> norm_meas(3 * numViews, numPoints);
-		norm_meas.reserve(numVisible);	//copy constructor does not also allocate size for norm_meas
+		Eigen::SparseMatrix<MatrixType,Eigen::ColMajor,IndexType> norm_meas(3 * numViews, numPoints);
+		norm_meas.reserve(numVisible);	
+
+
+		for (size_t i = 0; i < numViews; i++)
+		{
+			//[normalisations(j * 3 - 2:j * 3, : ), norm_meas(j * 3 - 2:j * 3, vis_pts)] = normtrans(img_meas(j * 3 - 2:j * 3, vis_pts));
+			//accessing the sparse matrix (colmajor) row per row is inefficient
+
+			//measurements.
+			//AlgebraHelpers::NormTrans(measurements.block());
+				
+		}
 	}
 
 	void EliminateDLT()
@@ -496,7 +661,6 @@ namespace P2SFM
 		//Eigen::Map<Array<double>> sparseArr(copy.valuePtr(), copy.nonZeros());
 		//auto data = copy.transpose() / ((sparseArr.array().pow(2)).sum());
 	}
-
 
 	void PairsAffinity(MatrixSparse<double>& measurements, const MatrixSparse<bool>& visible, const Eigen::Vector2i& img_size, const Options& options = Options())
 	{
