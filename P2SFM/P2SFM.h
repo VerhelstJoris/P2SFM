@@ -103,7 +103,7 @@ namespace P2SFM
 			Array<double> scaleArr(dimensions);
 			scaleArr.setZero();
 
-
+			bool homogeneous =true;
 			Array<bool> homogenous( (dimensions-1)/3 +1);	//size of amount of entries/3
 			if (subMat.rows() % 3 == 0)	//can be homogenous
 				homogenous.setOnes();
@@ -120,8 +120,9 @@ namespace P2SFM
 					pointsPerDimension[it.row()]++;
 
 					//every value in a 3rd row should have it's value be ==1 for the matrix to be homogenous already
-					if ((it.row()+1) % 3 == 0 && it.value() != (MatrixType)1)
-						homogenous[it.row() / 3] = false;
+					if ((it.row() + 1) % 3 == 0 && it.value() != (MatrixType)1)
+						homogeneous = false;
+						//homogenous[it.row() / 3] = false;
 					
 				}
 			}
@@ -130,14 +131,14 @@ namespace P2SFM
 			////every third element should have a value of 1 of the entire submat is homogenous
 			tempArr /= pointsPerDimension;
 			std::vector<Eigen::Triplet<MatrixType,IndexType>> tripletList;
-			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> scaleMatrix(3, dimensions);
-			scaleMatrix.reserve((3 * dimensions) / 9 * 5);
+			//Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> transMatrix(3, dimensions);
+			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> transMatrix(dimensions, dimensions);
+			transMatrix.reserve((3 * dimensions) / 9 * 5);
 			tripletList.reserve((3 * dimensions) / 9 * 5);	//exact amount of elements
 
 			if (isotropic)
 			{
 				std::cout << "ISOTROPIC TEST" << std::endl;
-				//scaleArr.resize(dimensions / 3); //one value per view
 
 				//SUM OF COL (matching x/y value) ,leave out third col if homogenous
 				//scale = sqrt(2) . / mean(sqrt(sum(diff. ^ 2, 1)));
@@ -148,14 +149,12 @@ namespace P2SFM
 					{
 						auto prevVal = it.value();
 						++it;
-						std::cout << "DIFF: "  << pow(it.value() - tempArr[it.row()], 2) + pow(prevVal - tempArr[it.row() - 1], 2) << std::endl;
 						scaleArr[it.row()/3] += (sqrt(pow(it.value() - tempArr[it.row()],2) + pow(prevVal - tempArr[it.row() - 1],2)))/pointsPerDimension[it.row()] ;
 						++it;	//skip over third row
 					}
 				}
 
 				scaleArr = sqrt(2) / scaleArr;
-				std::cout << "SCALE: " << scaleArr << std::endl;
 
 				//create matrix containing transformations for a single view (3 rows)
 				// scale	   0		-centroid.x *  scale
@@ -164,19 +163,18 @@ namespace P2SFM
 				//then apply this matrix to the relevant view for a final 'normalized matrix'
 				for (size_t i = 0; i < scaleArr.size(); i += 3)	//rework indexing
 				{
-
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(0, i, scaleArr[i/3])); //x-scale
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(1, i + 1, scaleArr[i/3])); //y-scale
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(2, i + 2, (MatrixType)1)); //1
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(0, i + 2, -tempArr[i] * scaleArr[i/3]));
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(1, i + 2, -tempArr[i] * scaleArr[i/3]));
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i, i, scaleArr[i/3])); //x-scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+1, i + 1, scaleArr[i/3])); //y-scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+2, i + 2, (MatrixType)1)); //1
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i, i + 2, -tempArr[i] * scaleArr[i/3]));
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+1, i + 2, -tempArr[i] * scaleArr[i/3]));
 				}
 
-				scaleMatrix.setFromTriplets(tripletList.begin(), tripletList.end());
+				transMatrix.setFromTriplets(tripletList.begin(), tripletList.end());
 
 
-				std::cout << "SCALED: " << std::endl;
-				std::cout << scaleMatrix << std::endl;
+				std::cout << "SCALE MATRIX: " << std::endl;
+				std::cout << transMatrix << std::endl;
 			}
 			else
 			{
@@ -196,7 +194,7 @@ namespace P2SFM
 				//calculate the mean of the abs values, per ROW
 				scaleArr = sqrt(2) / (scaleArr/pointsPerDimension);
 
-				std::cout << "SCALE: " << scaleArr.size() << std::endl;
+				std::cout << "SCALE: " << scaleArr << std::endl;
 
 				//create matrix containing transformations for a single view (3 rows)
 				// x-scale	   0		-centroid.x * x scale
@@ -205,33 +203,31 @@ namespace P2SFM
 				//then apply this matrix to the relevant view for a final 'normalized matrix'
 				for (size_t i = 0; i < scaleArr.size() ; i+=3)	//rework indexing
 				{
-					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i , 0, scaleArr[i])); //x-scale
-					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i +1, 1, scaleArr[i+1])); //y-scale
-					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i +2, 2, (MatrixType)1)); //1
-					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i, 2, -tempArr[i] * scaleArr.coeffRef(i) )); //-centroid.x * x scale
-					//tripletList.push_back(Eigen::Triplet<MatrixType,IndexType>(i +1, 2, -tempArr[i + 1] * scaleArr.coeffRef(i + 1) )); //-centroid.y * y scale
-
-
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(0, i, scaleArr[i])); //x-scale
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(1, i+1, scaleArr[i + 1])); //y-scale
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(2, i+2, (MatrixType)1)); //1
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(0, i+2, -tempArr[i] * scaleArr[i])); //-centroid.x * x scale
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(1, i+2, -tempArr[i + 1] * scaleArr[i+1])); //-centroid.y * y scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i, i, scaleArr[i])); //x-scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+1, i+1, scaleArr[i + 1])); //y-scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+2, i+2, (MatrixType)1)); //1
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i, i+2, -tempArr[i] * scaleArr[i])); //-centroid.x * x scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+1, i+2, -tempArr[i + 1] * scaleArr[i+1])); //-centroid.y * y scale
 				}
 
-				scaleMatrix.setFromTriplets(tripletList.begin(), tripletList.end());
+				transMatrix.setFromTriplets(tripletList.begin(), tripletList.end());
 
 				std::cout << "SCALED: " << std::endl;
-				std::cout << scaleMatrix << std::endl;
+				std::cout << transMatrix << std::endl;
 
-				//std::cout << "LEFT DIMENSIONS: [" << subMat.rows() << ", " << subMat.cols() << "] RIGHT DIMENSONS: [" << scaleMatrix.rows() << ", " << scaleMatrix.cols() << "]" << std::endl;
-
-				//copyMat = scaleMatrix * subMat;
-				//std::cout << copyMat << std::endl;
 			}
 
-		}
+			if (homogeneous)	//adapt to incorporate array of homogonous<bool>??
+			{
+				copyMat = transMatrix * subMat;	//this output is correct when working with a single view
+				std::cout << "TRANFORMATION" << std::endl;
+				std::cout << copyMat << std::endl;
+			}
+			else
+			{
 
+			}
+		}
 	}
 
 
