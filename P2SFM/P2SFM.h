@@ -79,42 +79,46 @@ namespace P2SFM
 		  made of a translation so that the origin is the centroid,
 		  and a rescaling so that the average distance to it is sqrt(2).
 		  Input:
-		    * copy of points, the data points, if all the entries of every 3rd row are ones, it is assumed it is homogeneous.
-		    * isotropic, boolean indicating if the scaling should be isotropic(default) or not.
+		    * measMat: the data points, if all the entries of every 3rd row are ones, it is assumed it is homogeneous.
+			* normalizedMat: empty matrix passed by ref
+			* transformMat: empty matrix passed by ref
+		    * isotropic: boolean indicating if the scaling should be isotropic(default) or not.
 		  Output :
-		    * trans, the transformation applied.
-		    * points, the new data points coordinates.
+		    * normalizedMat: the transformation applied to measMat.
+			* transformMat: the transformation matrix itself
 		*/
 		template <typename MatrixType, typename IndexType>
-		void NormTrans(const Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& subMat, bool isotropic = true)
+		void NormTrans(const Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& measMat,
+			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& normalizedMat,
+			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& transformMat,
+			bool isotropic = true)
 		{
+			IndexType dimensions = measMat.rows();
+			normalizedMat.resize(dimensions, measMat.cols());
+			normalizedMat.reserve(measMat.nonZeros());
 
-			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> copyMat(subMat);
-			copyMat.makeCompressed();
+			transformMat.reserve((3 * dimensions) / 9 * 5);
+			transformMat.resize(dimensions, dimensions);
 
-			IndexType dimensions = subMat.rows();
 
 			//create array 
 			Array<double> tempArr(dimensions); //temporary to store differences/centroids
 			Array<double> pointsPerDimension(dimensions);
 			//each view has its own scale
+			Array<double> scaleArr(dimensions);
+
 			tempArr.setZero();
 			pointsPerDimension.setZero();
-			Array<double> scaleArr(dimensions);
 			scaleArr.setZero();
 
 			bool homogeneous =true;
-			Array<bool> homogenous( (dimensions-1)/3 +1);	//size of amount of entries/3
-			if (subMat.rows() % 3 == 0)	//can be homogenous
-				homogenous.setOnes();
-			else 				//amount of rows is borked, no guarantee the rows of this matrix follow the format for homogenous coords [x,y,1]
-				homogenous.setZero();
+	
 
-			//check if every value in the last row in subMat is ==1
+			//check if every value in the last row in measMat is ==1
 			//cannot access a single row as we are in a colMajor format
-			for (int k = 0; k < subMat.outerSize(); ++k)
+			for (int k = 0; k < measMat.outerSize(); ++k)
 			{
-				for (MatrixSparse<double>::InnerIterator it(subMat, k); it; ++it)
+				for (MatrixSparse<double>::InnerIterator it(measMat, k); it; ++it)
 				{
 					tempArr[it.row()] += it.value();
 					pointsPerDimension[it.row()]++;
@@ -131,9 +135,7 @@ namespace P2SFM
 			////every third element should have a value of 1 of the entire submat is homogenous
 			tempArr /= pointsPerDimension;
 			std::vector<Eigen::Triplet<MatrixType,IndexType>> tripletList;
-			//Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> transMatrix(3, dimensions);
-			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> transMatrix(dimensions, dimensions);
-			transMatrix.reserve((3 * dimensions) / 9 * 5);
+		
 			tripletList.reserve((3 * dimensions) / 9 * 5);	//exact amount of elements
 
 			if (isotropic)
@@ -143,9 +145,9 @@ namespace P2SFM
 				//SUM OF COL (matching x/y value) ,leave out third col if homogenous
 				//scale = sqrt(2) . / mean(sqrt(sum(diff. ^ 2, 1)));
 				// mean every row(sqrt(sum per row(element wise power for every value in diff)))
-				for (int k = 0; k < copyMat.outerSize(); ++k)
+				for (int k = 0; k < measMat.outerSize(); ++k)
 				{
-					for (MatrixSparse<double>::InnerIterator it(copyMat, k); it; ++it)
+					for (MatrixSparse<double>::InnerIterator it(measMat, k); it; ++it)
 					{
 						auto prevVal = it.value();
 						++it;
@@ -170,20 +172,14 @@ namespace P2SFM
 					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+1, i + 2, -tempArr[i] * scaleArr[i/3]));
 				}
 
-				transMatrix.setFromTriplets(tripletList.begin(), tripletList.end());
-
-
-				std::cout << "SCALE MATRIX: " << std::endl;
-				std::cout << transMatrix << std::endl;
+				transformMat.setFromTriplets(tripletList.begin(), tripletList.end());
 			}
 			else
 			{
-				std::cout << "NON-ISOTROPIC TEST" << std::endl;
 
-
-				for (int k = 0; k < copyMat.outerSize(); ++k)
+				for (int k = 0; k < measMat.outerSize(); ++k)
 				{
-					for (MatrixSparse<double>::InnerIterator it(copyMat, k); it; ++it)
+					for (MatrixSparse<double>::InnerIterator it(measMat, k); it; ++it)
 					{
 						scaleArr[it.row()] += abs(it.value() - tempArr[it.row()]);	//can this be moved to the earlier iteration??
 						//problem being the fact it needs to be the absolute value
@@ -193,8 +189,6 @@ namespace P2SFM
 
 				//calculate the mean of the abs values, per ROW
 				scaleArr = sqrt(2) / (scaleArr/pointsPerDimension);
-
-				std::cout << "SCALE: " << scaleArr << std::endl;
 
 				//create matrix containing transformations for a single view (3 rows)
 				// x-scale	   0		-centroid.x * x scale
@@ -210,22 +204,21 @@ namespace P2SFM
 					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+1, i+2, -tempArr[i + 1] * scaleArr[i+1])); //-centroid.y * y scale
 				}
 
-				transMatrix.setFromTriplets(tripletList.begin(), tripletList.end());
-
-				std::cout << "SCALED: " << std::endl;
-				std::cout << transMatrix << std::endl;
-
+				transformMat.setFromTriplets(tripletList.begin(), tripletList.end());
 			}
 
-			if (homogeneous)	//adapt to incorporate array of homogonous<bool>??
+			normalizedMat = transformMat * measMat;
+			if (!homogeneous)
 			{
-				copyMat = transMatrix * subMat;	//this output is correct when working with a single view
-				std::cout << "TRANFORMATION" << std::endl;
-				std::cout << copyMat << std::endl;
-			}
-			else
-			{
-
+				//all values in 3rd rows to 1
+				for (int k = 0; k < normalizedMat.outerSize(); ++k)
+				{
+					for (MatrixSparse<double>::InnerIterator it(normalizedMat, k); it; ++it)
+					{
+						if ((it.row() + 1) % 3 == 0)
+							it.valueRef() = (MatrixType)1;
+					}
+				}
 			}
 		}
 	}
