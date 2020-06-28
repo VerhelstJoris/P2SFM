@@ -516,7 +516,7 @@ namespace P2SFM
 		int max_level_views = 5; // the maximum level of eligibility thresholds for views
 		int eligibility_point[9] = { 10,9, 8,7, 6, 5, 4, 3, 2 }; // eligibility thresholds for points at each level
 		int init_level_points = 6; // the initial level of eligibility thresholds for points
-		int max_level_points = 8; // the maximum level of eligibility thresholds for points
+		int max_level_points = 9; // the maximum level of eligibility thresholds for points
 		bool differ_last_level = false; // differ the last level of eligibility thresholds for points until last resort situation
 		int min_common_init = 200; // Number of minimum common projections for the initial pair
 		int max_models = 5; // Number of maximum models, reconstruction is restarted from a completely new pair of views each time
@@ -576,11 +576,10 @@ namespace P2SFM
 
 		Eigen::Matrix<MatrixType, 2, 3>data;
 
-		data << 0, -measEntry.coeff(2, 0), -measEntry.coeff(1, 0),
+		data << 0, -measEntry.coeff(2, 0), measEntry.coeff(1, 0),
 			measEntry.coeff(2, 0), 0, -measEntry.coeff(0, 0);
 
 		return { cpm_meas, data };
-
 	}
 
 	/*
@@ -607,25 +606,31 @@ namespace P2SFM
 	/*
 	Transform the original image coordinates into normalised homogeneous coordinates and various sparse matrices needed.
 	 Input:
-      * orig_meas: Original image coordinates (2FxN sparse matrix where missing data are [0;0])
+      * measurements: Original image coordinates (2FxN sparse matrix where missing data are [0;0])
       * options:  Structure containing options, can be left blank for default values
      Output:
+	  * measurements: Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores (3FxN
       * data: Matrix containing the data to compute the cost function (2Fx3N)
       * pinv_meas: Matrix containing the data for elimination of projective depths,
 	    cross-product matrix or pseudo-inverse of the of the normalized homogeneous coordinates (Fx3N)
       * norm_meas: Normalized homogeneous projections coordinates (2FxN sparse matrix where missing data are [0;0])
       * visible: Visibility DENSE matrix binary mask (FxN)
       * normalisations: Normalisation transformation for each camera stacked vertically (3Fx3)
-      * img_meas: Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores (3FxN)*/
+      */
 	template <typename MatrixType, typename IndexType>
 	void PrepareData(Eigen::SparseMatrix<MatrixType,Eigen::ColMajor, IndexType>& measurements, 
+		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& data,
+		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& pinv_meas,
+		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& norm_meas,
+		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& normalisations,
+		MatrixDynamicDense<bool>& visibility,
 		const Options& options = Options())
 	{
 		//Points not visible enough will never be considered, removing them make data matrices smaller and computations more efficient
 		const int optionsVal = options.eligibility_point[options.max_level_points];
 
-		//create visibility matrix initialized to false
-		MatrixDynamicDense<bool> visibility(measurements.rows()/2, measurements.cols());
+		//setup visibility matrix
+		visibility.resize(measurements.rows() / 2, measurements.cols());
 		visibility.fill(false);
 
 		//[x,y] -> [x,y,1]
@@ -639,10 +644,7 @@ namespace P2SFM
 		{
 			for (MatrixSparse<double>::InnerIterator it(measurements, k); it; ++it)
 			{
-
 				//chance of data having an x or y equal to 0 is very slim but not impossible
-				//std::cout << "row: " << prevRow << " | " << it.row() << " col: " << prevCol << " | " << it.col() << std::endl;
-				//std::cout << it.index() << " ";
 				if (prevRow + 1 == it.row() && prevCol == it.col() )
 				{
 					if ((it.value() + prevVal) > optionsVal)
@@ -679,14 +681,10 @@ namespace P2SFM
 		measurements.resize(measurements.rows() + (measurements.rows() / 2), measurements.cols());
 		measurements.setFromTriplets(tripletList.begin(), tripletList.end());
 
-
-		std::cout << "TEST MATRIX" << std::endl << measurements << std::endl;
-
 		const int numVisible = measurements.nonZeros();
 		const int numViews = measurements.rows();
 		const int numPoints = measurements.cols();
 
-		Eigen::SparseMatrix<MatrixType,Eigen::ColMajor,IndexType> norm_meas,normalisations;
 
 		AlgebraHelpers::NormTrans(measurements, norm_meas, normalisations);
 		std::cout <<"====================================" << 
@@ -698,7 +696,6 @@ namespace P2SFM
 
 		Eigen::Matrix<MatrixType, 1, 3> measRet;
 		Eigen::Matrix<MatrixType, 2, 3> dataRet;
-
 		for (int k = 0; k < norm_meas.outerSize(); ++k)
 		{
 			for (MatrixSparse<double>::InnerIterator it(norm_meas, k); it; ++it)
@@ -708,6 +705,7 @@ namespace P2SFM
 				{
 
 					Eigen::Matrix<MatrixType, 3, 1> entry(firstVal, secondVal, it.value());
+					std::cout << "entry: " << entry << std::endl;
 					if (options.elimination_method == Options::Elimination_Method::DLT)
 					{
 						std::tie(measRet,dataRet) = EliminateDLT(entry);
@@ -722,11 +720,15 @@ namespace P2SFM
 					//col incrementing based on counter
 					//row is it.row/3
 					//[cpm/dlt.x cpm/dlt.y cpm/dlt.z]
-
-					//current col is not correct
 					tripletDLTPINV.push_back(Eigen::Triplet<MatrixType, IndexType>(rowVal/ 3, it.col() * 3, measRet[0]));
 					tripletDLTPINV.push_back(Eigen::Triplet<MatrixType, IndexType>(rowVal/ 3, it.col() * 3 + 1, measRet[1]));
 					tripletDLTPINV.push_back(Eigen::Triplet<MatrixType, IndexType>(rowVal/ 3, it.col() * 3 + 2, measRet[2]));
+
+					//insert 'dataRet' in it's current form into a larger sparse matrix
+					for (size_t i = 0; i < 6; i++)
+					{
+						tripletData.push_back(Eigen::Triplet<MatrixType, IndexType>(rowVal/3*2 + (i%2),it.col() * 3 + i/2,dataRet(i)));
+					}
 				}
 				else
 				{
@@ -736,13 +738,13 @@ namespace P2SFM
 			}
 		}
 
-		//4 * 10 (20 entries) -> 2 * 30 //initiz
-		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> pinv_dlt_meas(norm_meas.rows()/3, norm_meas.cols()*3);
-		pinv_dlt_meas.reserve(tripletDLTPINV.size());
-		pinv_dlt_meas.setFromTriplets(tripletDLTPINV.begin(), tripletDLTPINV.end());
+		pinv_meas.resize(norm_meas.rows()/3, norm_meas.cols()*3);
+		pinv_meas.reserve(tripletDLTPINV.size());
+		pinv_meas.setFromTriplets(tripletDLTPINV.begin(), tripletDLTPINV.end());
 
-		std::cout << "PINV/DLT ENTRIES SPARSE MATRIX" << std::endl;
-		std::cout << pinv_dlt_meas << std::endl;
+		data.resize(measurements.rows()/3*2 , norm_meas.cols() * 3);
+		data.reserve(tripletData.size());
+		data.setFromTriplets(tripletData.begin(), tripletData.end());
 
 	}
 
