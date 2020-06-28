@@ -221,6 +221,20 @@ namespace P2SFM
 				}
 			}
 		}
+
+
+		//construct a matrix
+		template <typename MatrixType>
+		inline Eigen::Matrix<MatrixType, 3, 3> CrossProductMatrix(const Eigen::Matrix<MatrixType, 3, 1>& measEntry)
+		{
+			//M = [0 - v(3) v(2); v(3) 0 - v(1); -v(2) v(1) 0];
+			Eigen::Matrix<MatrixType, 3, 3> M;
+			M << 0, -measEntry.coeff(2, 0), -measEntry.coeff(1, 0),
+				measEntry.coeff(2, 0), 0, -measEntry.coeff(0, 0),
+				-measEntry.coeff(1, 0), measEntry.coeff(0, 0), 0;
+			return M;
+		}
+
 	}
 
 
@@ -544,6 +558,52 @@ namespace P2SFM
 		bool diagnosis_save = false; // false = no save, a text string = template to save to(must have a %d field)
 		bool diagnosis_cameras = false; // display the cameras in the 3D model
 	};
+
+
+
+	/*
+	Input:
+		*measEntry : single homogeneous coordinate
+	Output:
+		*
+		*
+	*/
+	template <typename MatrixType>
+	std::tuple<Eigen::Matrix<MatrixType, 1, 3>, Eigen::Matrix<MatrixType, 2, 3>>
+		EliminateDLT(const Eigen::Matrix<MatrixType, 3, 1>& measEntry)
+	{
+		Eigen::Matrix<MatrixType, 1, 3> cpm_meas = measEntry.transpose() / measEntry.array().pow(2).sum();
+
+		Eigen::Matrix<MatrixType, 2, 3>data;
+
+		data << 0, -measEntry.coeff(2, 0), -measEntry.coeff(1, 0),
+			measEntry.coeff(2, 0), 0, -measEntry.coeff(0, 0);
+
+		return { cpm_meas, data };
+
+	}
+
+	/*
+	Input:
+		*measEntry : single homogeneous coordinate
+	Output:
+		*
+		*
+	*/
+	template <typename MatrixType>
+	std::tuple<Eigen::Matrix<MatrixType, 1, 3>, Eigen::Matrix<MatrixType, 2, 3>>
+		EliminatePINV(const Eigen::Matrix<MatrixType, 3, 1>& measEntry)
+	{
+		Eigen::Matrix<MatrixType, 1, 3> pinv_meas = measEntry.transpose() / measEntry.array().pow(2).sum();
+
+		Eigen::Matrix<MatrixType, 3, 3> data = measEntry * pinv_meas;
+		data.coeffRef(0, 0) -= (MatrixType)1;
+		data.coeffRef(1, 1) -= (MatrixType)1;
+
+		return { pinv_meas, data.block<2,3>(0,0) };
+	}
+
+
 	/*
 	Transform the original image coordinates into normalised homogeneous coordinates and various sparse matrices needed.
 	 Input:
@@ -558,8 +618,8 @@ namespace P2SFM
       * normalisations: Normalisation transformation for each camera stacked vertically (3Fx3)
       * img_meas: Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores (3FxN)*/
 	template <typename MatrixType, typename IndexType>
-	//void PrepareData(MatrixSparse<double>& measurements, const Options& options = Options())
-	void PrepareData(Eigen::SparseMatrix<MatrixType,Eigen::ColMajor, IndexType>& measurements, const Options& options = Options())
+	void PrepareData(Eigen::SparseMatrix<MatrixType,Eigen::ColMajor, IndexType>& measurements, 
+		const Options& options = Options())
 	{
 		//Points not visible enough will never be considered, removing them make data matrices smaller and computations more efficient
 		const int optionsVal = options.eligibility_point[options.max_level_points];
@@ -574,6 +634,7 @@ namespace P2SFM
 
 		IndexType prevCol = 0, prevRow = 0;
 		MatrixType prevVal = (MatrixType)0;
+
 		for (int k = 0; k < measurements.outerSize(); ++k)
 		{
 			for (MatrixSparse<double>::InnerIterator it(measurements, k); it; ++it)
@@ -618,37 +679,71 @@ namespace P2SFM
 		measurements.resize(measurements.rows() + (measurements.rows() / 2), measurements.cols());
 		measurements.setFromTriplets(tripletList.begin(), tripletList.end());
 
+
+		std::cout << "TEST MATRIX" << std::endl << measurements << std::endl;
+
 		const int numVisible = measurements.nonZeros();
 		const int numViews = measurements.rows();
 		const int numPoints = measurements.cols();
 
-		Eigen::SparseMatrix<MatrixType,Eigen::ColMajor,IndexType> norm_meas(3 * numViews, numPoints);
-		norm_meas.reserve(numVisible);	
+		Eigen::SparseMatrix<MatrixType,Eigen::ColMajor,IndexType> norm_meas,normalisations;
 
+		AlgebraHelpers::NormTrans(measurements, norm_meas, normalisations);
+		std::cout <<"====================================" << 
+		std::endl<< "NORM TRANS FINISHED" << std::endl;
 
-		for (size_t i = 0; i < numViews; i++)
+		std::vector<Eigen::Triplet<MatrixType,IndexType>> tripletDLTPINV;	
+		std::vector<Eigen::Triplet<MatrixType,IndexType>> tripletData;	//4*10 (20 netries) -> 4*30
+		MatrixType firstVal = (MatrixType)0, secondVal = (MatrixType)0;
+
+		Eigen::Matrix<MatrixType, 1, 3> measRet;
+		Eigen::Matrix<MatrixType, 2, 3> dataRet;
+
+		for (int k = 0; k < norm_meas.outerSize(); ++k)
 		{
-			//[normalisations(j * 3 - 2:j * 3, : ), norm_meas(j * 3 - 2:j * 3, vis_pts)] = normtrans(img_meas(j * 3 - 2:j * 3, vis_pts));
-			//accessing the sparse matrix (colmajor) row per row is inefficient
+			for (MatrixSparse<double>::InnerIterator it(norm_meas, k); it; ++it)
+			{
+				const IndexType rowVal = it.row();
+				if ((rowVal + 1) % 3 == 0)
+				{
 
-			//measurements.
-			//AlgebraHelpers::NormTrans(measurements.block());
-				
+					Eigen::Matrix<MatrixType, 3, 1> entry(firstVal, secondVal, it.value());
+					if (options.elimination_method == Options::Elimination_Method::DLT)
+					{
+						std::tie(measRet,dataRet) = EliminateDLT(entry);
+					}
+					else if (options.elimination_method == Options::Elimination_Method::PNV)
+					{
+						std::tie(measRet, dataRet) = EliminatePINV(entry);
+					}
+
+					//PINV/DLT data
+					//add 3 data points to the matrix in following form with 
+					//col incrementing based on counter
+					//row is it.row/3
+					//[cpm/dlt.x cpm/dlt.y cpm/dlt.z]
+
+					//current col is not correct
+					tripletDLTPINV.push_back(Eigen::Triplet<MatrixType, IndexType>(rowVal/ 3, it.col() * 3, measRet[0]));
+					tripletDLTPINV.push_back(Eigen::Triplet<MatrixType, IndexType>(rowVal/ 3, it.col() * 3 + 1, measRet[1]));
+					tripletDLTPINV.push_back(Eigen::Triplet<MatrixType, IndexType>(rowVal/ 3, it.col() * 3 + 2, measRet[2]));
+				}
+				else
+				{
+					firstVal = secondVal;
+					secondVal = it.value();
+				}
+			}
 		}
-	}
 
-	void EliminateDLT()
-	{
+		//4 * 10 (20 entries) -> 2 * 30 //initiz
+		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType> pinv_dlt_meas(norm_meas.rows()/3, norm_meas.cols()*3);
+		pinv_dlt_meas.reserve(tripletDLTPINV.size());
+		pinv_dlt_meas.setFromTriplets(tripletDLTPINV.begin(), tripletDLTPINV.end());
 
-	}
+		std::cout << "PINV/DLT ENTRIES SPARSE MATRIX" << std::endl;
+		std::cout << pinv_dlt_meas << std::endl;
 
-	void EliminatePINV(const MatrixSparse<double>& meas)
-	{
-		//.array only works on dense matrix
-		//auto copy(meas);
-		//copy.makeCompressed();
-		//Eigen::Map<Array<double>> sparseArr(copy.valuePtr(), copy.nonZeros());
-		//auto data = copy.transpose() / ((sparseArr.array().pow(2)).sum());
 	}
 
 	void PairsAffinity(MatrixSparse<double>& measurements, const MatrixSparse<bool>& visible, const Eigen::Vector2i& img_size, const Options& options = Options())
