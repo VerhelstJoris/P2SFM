@@ -516,7 +516,7 @@ namespace P2SFM
 		int max_level_views = 5; // the maximum level of eligibility thresholds for views
 		int eligibility_point[9] = { 10,9, 8,7, 6, 5, 4, 3, 2 }; // eligibility thresholds for points at each level
 		int init_level_points = 6; // the initial level of eligibility thresholds for points
-		int max_level_points = 9; // the maximum level of eligibility thresholds for points
+		int max_level_points = 7; // the maximum level of eligibility thresholds for points
 		bool differ_last_level = false; // differ the last level of eligibility thresholds for points until last resort situation
 		int min_common_init = 200; // Number of minimum common projections for the initial pair
 		int max_models = 5; // Number of maximum models, reconstruction is restarted from a completely new pair of views each time
