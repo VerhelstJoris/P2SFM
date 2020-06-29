@@ -9,9 +9,9 @@
 //dynamic sized dense matrix template 
 template <typename Type> using MatrixDynamicDense = Eigen::Matrix<Type, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>;
 
-//typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixSparse;
+//typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixColSparse;
 //dynamic sized sparse matrix template
-template <typename Type> using MatrixSparse = Eigen::SparseMatrix<Type, Eigen::ColMajor, int64_t>;
+template <typename ScalarType, typename IndexType> using MatrixColSparse = Eigen::SparseMatrix<ScalarType, Eigen::ColMajor, IndexType>;
 
 //vector Template
 template <typename Type> using Vector = Eigen::Matrix<Type,1, Eigen::Dynamic>;
@@ -88,9 +88,9 @@ namespace P2SFM
 			* transformMat: the transformation matrix itself
 		*/
 		template <typename MatrixType, typename IndexType>
-		void NormTrans(const Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& measMat,
-			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& normalizedMat,
-			Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& transformMat,
+		void NormTrans(const MatrixColSparse<MatrixType, IndexType>& measMat,
+			MatrixColSparse<MatrixType, IndexType>& normalizedMat,
+			MatrixColSparse<MatrixType, IndexType>& transformMat,
 			bool isotropic = true)
 		{
 			IndexType dimensions = measMat.rows();
@@ -112,13 +112,12 @@ namespace P2SFM
 			scaleArr.setZero();
 
 			bool homogeneous =true;
-	
 
 			//check if every value in the last row in measMat is ==1
 			//cannot access a single row as we are in a colMajor format
 			for (int k = 0; k < measMat.outerSize(); ++k)
 			{
-				for (MatrixSparse<double>::InnerIterator it(measMat, k); it; ++it)
+				for (typename MatrixColSparse<MatrixType,IndexType>::InnerIterator it(measMat, k); it; ++it)
 				{
 					tempArr[it.row()] += it.value();
 					pointsPerDimension[it.row()]++;
@@ -140,14 +139,12 @@ namespace P2SFM
 
 			if (isotropic)
 			{
-				std::cout << "ISOTROPIC TEST" << std::endl;
-
 				//SUM OF COL (matching x/y value) ,leave out third col if homogenous
 				//scale = sqrt(2) . / mean(sqrt(sum(diff. ^ 2, 1)));
 				// mean every row(sqrt(sum per row(element wise power for every value in diff)))
 				for (int k = 0; k < measMat.outerSize(); ++k)
 				{
-					for (MatrixSparse<double>::InnerIterator it(measMat, k); it; ++it)
+					for (typename MatrixColSparse<MatrixType,IndexType>::InnerIterator it(measMat, k); it; ++it)
 					{
 						auto prevVal = it.value();
 						++it;
@@ -179,7 +176,7 @@ namespace P2SFM
 
 				for (int k = 0; k < measMat.outerSize(); ++k)
 				{
-					for (MatrixSparse<double>::InnerIterator it(measMat, k); it; ++it)
+					for (typename MatrixColSparse<MatrixType,IndexType>::InnerIterator it(measMat, k); it; ++it)
 					{
 						scaleArr[it.row()] += abs(it.value() - tempArr[it.row()]);	//can this be moved to the earlier iteration??
 						//problem being the fact it needs to be the absolute value
@@ -213,7 +210,7 @@ namespace P2SFM
 				//all values in 3rd rows to 1
 				for (int k = 0; k < normalizedMat.outerSize(); ++k)
 				{
-					for (MatrixSparse<double>::InnerIterator it(normalizedMat, k); it; ++it)
+					for (typename MatrixColSparse<MatrixType,IndexType>::InnerIterator it(normalizedMat, k); it; ++it)
 					{
 						if ((it.row() + 1) % 3 == 0)
 							it.valueRef() = (MatrixType)1;
@@ -295,7 +292,7 @@ namespace P2SFM
 			if (level > 0 && proj_count.nonZeros()!=0)
 			{
 				//get logical matrix saying whether or not 
-				MatrixSparse<int32_t> visible(proj_count);
+				MatrixColSparse<int32_t,int> visible(proj_count);
 
 				//lambda because default prune looks at absolute values of val
 				//essentially create a 'logical' matrix, with all existing values being 1
@@ -314,7 +311,7 @@ namespace P2SFM
 				//get all indices of points in visible
 				for (int k = 0; k < visible.outerSize(); ++k)
 				{
-					for (MatrixSparse<int32_t>::InnerIterator it(visible, k); it; ++it)
+					for (MatrixColSparse<int32_t,int>::InnerIterator it(visible, k); it; ++it)
 					{
 						indices.push_back(Eigen::Vector2i(it.row(), it.col()));
 					}
@@ -487,7 +484,7 @@ namespace P2SFM
 		//'Array' typedef as opposed to matrix for better arithmetic options
 		Array<int> dim_range;
 		
-		MatrixSparse<int32_t> proj_count;
+		MatrixColSparse<int32_t,int> proj_count;
 	};
 
 	struct Options {
@@ -618,11 +615,11 @@ namespace P2SFM
       * normalisations: Normalisation transformation for each camera stacked vertically (3Fx3)
       */
 	template <typename MatrixType, typename IndexType>
-	void PrepareData(Eigen::SparseMatrix<MatrixType,Eigen::ColMajor, IndexType>& measurements, 
-		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& data,
-		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& pinv_meas,
-		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& norm_meas,
-		Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& normalisations,
+	void PrepareData(MatrixColSparse<MatrixType, IndexType>& measurements,
+		MatrixColSparse<MatrixType,  IndexType>& data,
+		MatrixColSparse<MatrixType,  IndexType>& pinv_meas,
+		MatrixColSparse<MatrixType,  IndexType>& norm_meas,
+		MatrixColSparse<MatrixType,  IndexType>& normalisations,
 		MatrixDynamicDense<bool>& visibility,
 		const Options& options = Options())
 	{
@@ -642,7 +639,7 @@ namespace P2SFM
 
 		for (int k = 0; k < measurements.outerSize(); ++k)
 		{
-			for (MatrixSparse<double>::InnerIterator it(measurements, k); it; ++it)
+			for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(measurements, k); it; ++it)
 			{
 				//chance of data having an x or y equal to 0 is very slim but not impossible
 				if (prevRow + 1 == it.row() && prevCol == it.col() )
@@ -659,16 +656,7 @@ namespace P2SFM
 				}
 				else 	//in case a a data entry only has an x or y value, not both
 				{	
-					//if (prevVal > optionsVal)
-					//{
-					//	std::cout << "PREV: " << prevRow << ", " << prevCol << ": " << prevVal << std::endl;
-					//	std::cout << "NEXT: " << it.row() << ", " << it.col() << ": " << it.value() << std::endl;
-					//
-					//	visibility.coeffRef(prevRow / 2, prevCol) = true;	
-					//	tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(prevRow + (prevRow / 2), prevCol, prevVal)); //prev it value
-					//	tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(prevRow + (prevRow / 2) + (2- prevRow%2), it.col(), 1)); //homogenous value (=1)
-					//
-					//}
+			
 				}
 
 				prevCol = it.col();
@@ -687,25 +675,23 @@ namespace P2SFM
 
 
 		AlgebraHelpers::NormTrans(measurements, norm_meas, normalisations);
-		std::cout <<"====================================" << 
-		std::endl<< "NORM TRANS FINISHED" << std::endl;
+
 
 		std::vector<Eigen::Triplet<MatrixType,IndexType>> tripletDLTPINV;	
-		std::vector<Eigen::Triplet<MatrixType,IndexType>> tripletData;	//4*10 (20 netries) -> 4*30
+		std::vector<Eigen::Triplet<MatrixType,IndexType>> tripletData;	
 		MatrixType firstVal = (MatrixType)0, secondVal = (MatrixType)0;
 
 		Eigen::Matrix<MatrixType, 1, 3> measRet;
 		Eigen::Matrix<MatrixType, 2, 3> dataRet;
 		for (int k = 0; k < norm_meas.outerSize(); ++k)
 		{
-			for (MatrixSparse<double>::InnerIterator it(norm_meas, k); it; ++it)
+			for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(norm_meas, k); it; ++it)
 			{
 				const IndexType rowVal = it.row();
 				if ((rowVal + 1) % 3 == 0)
 				{
 
 					Eigen::Matrix<MatrixType, 3, 1> entry(firstVal, secondVal, it.value());
-					std::cout << "entry: " << entry << std::endl;
 					if (options.elimination_method == Options::Elimination_Method::DLT)
 					{
 						std::tie(measRet,dataRet) = EliminateDLT(entry);
@@ -748,9 +734,10 @@ namespace P2SFM
 
 	}
 
-	void PairsAffinity(MatrixSparse<double>& measurements, const MatrixSparse<bool>& visible, const Eigen::Vector2i& img_size, const Options& options = Options())
+	template <typename MatrixType, typename IndexType>
+	void PairsAffinity(Eigen::SparseMatrix<MatrixType, Eigen::ColMajor, IndexType>& measurements, const MatrixDynamicDense<bool>& visibility, const Eigen::Vector2i& img_size, const Options& options = Options())
 	{
-		const int numViews = visible.rows();
+		const int numViews = visibility.rows();
 
 		const int num_pairs = AlgebraHelpers::BinomialCoeff(numViews, 2);	//how many combinations of views are there?
 
@@ -769,7 +756,6 @@ namespace P2SFM
 				auto secondView = measurements.row(j);
 
 				//get array of matching indices in first/secondview
-			
 			}
 		}
 

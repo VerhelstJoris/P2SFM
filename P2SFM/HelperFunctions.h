@@ -60,7 +60,7 @@ namespace Helper
 
 	//load in a named variable from a.MAT file into an mxArray, then load this mxArray into an Eigen Sparse Matrix for use later
 	//TO-DO: size_t can be 32 or 64 bit depending on OS -> provide for this
-	bool ReadSparseMatrixFromMat(const char* filePath, const char* varName, MatrixSparse<double>* sparseMat)
+	bool ReadSparseMatrixFromMat(const char* filePath, const char* varName, MatrixSparse<double,int64_t>* sparseMat)
 	{
 		mxArray* matrixMat = ReadMxArrayFromMat(filePath, varName);
 
@@ -84,7 +84,7 @@ namespace Helper
 			int64_t* rowIndex = reinterpret_cast<std::int64_t*>(mxGetIr(matrixMat));
 			int64_t* colIndex = reinterpret_cast<std::int64_t*>(mxGetJc(matrixMat));
 			
-			Eigen::Map<MatrixSparse<double>> spMap(nrRows, nrCols, nnz, colIndex, rowIndex, pr,0);
+			Eigen::Map<MatrixSparse<double,int64_t>> spMap(nrRows, nrCols, nnz, colIndex, rowIndex, pr,0);
 
 			sparseMat->reserve(nnz);
 			*sparseMat = spMap;
