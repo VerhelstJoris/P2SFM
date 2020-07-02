@@ -37,7 +37,10 @@ namespace P2SFM
 
 			std::sort(vec.rbegin(), vec.rend());	//actually sort the vector
 
+
 			//copy temp cols into mat cols
+			//TODO:
+			//can prevent making a copy of the matrix by swapping cols instead and keeping track of where the real one goes
 			MatrixDynamicDense<MatrixType> temp(mat);
 			for (size_t i = 0; i < mat.cols(); i++)
 			{
@@ -76,20 +79,6 @@ namespace P2SFM
 
 	namespace AlgebraHelpers
 	{
-		//replace with a more solid implementation
-		long int Factorial(long int n)
-		{
-			// single line to find factorial 
-			return (n == 1 || n == 0) ? 1 : n * Factorial(n - 1);
-		}
-
-		// binomial coefficient: This is the number of combinations of n items taken k at a time. n and k must be nonnegative integers.
-		long int BinomialCoeff(const int n, const int k)
-		{
-			//nice little overflow up your ass
-			return (Factorial(n) / (Factorial(n - k) * Factorial(k)));
-		}
-
 		/*Find a transformation to normalize some data points,
 		  made of a translation so that the origin is the centroid,
 		  and a rescaling so that the average distance to it is sqrt(2).
@@ -773,7 +762,8 @@ namespace P2SFM
 		//const int numViews = visibility.rows();
 		MatrixColSparse<MatrixType, IndexType> firstView(3, measurements.cols()), secondView(3, measurements.cols());
 
-		const int num_pairs = AlgebraHelpers::BinomialCoeff(visibility.rows(), 2);	//how many combinations of views are there?
+		//implement BOOST?
+		const int num_pairs = (visibility.rows()(visibility.rows() + 1)) / 2;
 		std::vector<int> affinity;
 		affinity.resize(num_pairs, 2);
 
@@ -873,4 +863,15 @@ namespace P2SFM
 		//return affinity and view_pairs
 		return {affinity,view_pairs};
 	}
+
+	//template <typename MatrixType, typename IndexType>
+	//void Initialisation(measurements, 
+	//	const MatrixDynamicDense<bool>& visibility, 
+	//	affinity, 
+	//	view_pairs, 
+	//	estimated_views,
+	//	const Options& options = Options())
+	//{
+	//
+	//}
 }
