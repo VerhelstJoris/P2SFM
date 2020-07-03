@@ -26,7 +26,7 @@ namespace P2SFM
 	{
 		//a vector is sorted in descending order, the matrix cols are then are arranged in the same manner as the vector was sorted
 		template <typename VecType, typename MatrixType>
-		void sortVectorAndMatrix(std::vector<VecType>&vec, MatrixDynamicDense<MatrixType> &mat) 
+		void sortVectorAndMatrix(std::vector<VecType>&vec, MatrixDynamicDense<MatrixType>& mat) 
 		{
 			// initialize original index locations
 			std::vector<size_t> idxVec(vec.size());
@@ -37,15 +37,15 @@ namespace P2SFM
 
 			std::sort(vec.rbegin(), vec.rend());	//actually sort the vector
 
-
 			//copy temp cols into mat cols
 			//TODO:
 			//can prevent making a copy of the matrix by swapping cols instead and keeping track of where the real one goes
 			MatrixDynamicDense<MatrixType> temp(mat);
 			for (size_t i = 0; i < mat.cols(); i++)
 			{
-				mat.col(idxVec[i]) = temp.col(i);
+				mat.col(i).swap(temp.col(i));
 			}
+
 		}
 
 
@@ -237,7 +237,6 @@ namespace P2SFM
 		}
 
 	}
-
 
 	//A class to deal efficiently with the pyramidal visibility score from "Structure-from-Motion Revisisted", Schonberger & Frahm, CVPR16.
 	struct PyramidalVisibilityScore
@@ -750,7 +749,7 @@ namespace P2SFM
 		* affinity : Affinity score for each pair of views(Kx1)
 	*/
 	template <typename MatrixType, typename IndexType>
-	std::tuple<std::vector<int>, MatrixDynamicDense<int>> 
+	std::tuple<std::vector<int>, MatrixDynamicDense<int> > 
 		PairsAffinity(const MatrixColSparse<MatrixType, IndexType>& measurements,
 		const MatrixDynamicDense<bool>& visibility, 
 		const MatrixDynamicDense<int>& img_size,
@@ -758,34 +757,35 @@ namespace P2SFM
 	{
 		//iterate over the transposed matrix so we go over the matrix row by row
 		MatrixColSparse<MatrixType, IndexType> transposedMat(measurements.transpose());
-
+		
 		//const int numViews = visibility.rows();
 		MatrixColSparse<MatrixType, IndexType> firstView(3, measurements.cols()), secondView(3, measurements.cols());
-
-		//implement BOOST?
-		const int num_pairs = (visibility.rows()(visibility.rows() + 1)) / 2;
+		//
+		////implement BOOST?
+		const int num_pairs = (visibility.rows()*(visibility.rows() + 1) ) / 2;
 		std::vector<int> affinity;
 		affinity.resize(num_pairs, 2);
-
+		
 		MatrixDynamicDense<int> view_pairs(num_pairs, 2);	//keep track of what firstView is being compared with what secondView
 		view_pairs.setZero();
-
+		
 		int offset = 0;	//a count of how many views have been compared 
 		std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletView;
-
-
+		
+		
 		//iterate over all the views (3 rows containing homogeneous coords)
 		for (int firstLoop = 0; firstLoop < transposedMat.outerSize()-3; firstLoop+=3)
 		{
 			//create a second double for-loop to acquire the second view and then compare the first and second view
 			for (int secondLoop = firstLoop + 3; secondLoop < transposedMat.outerSize(); secondLoop += 3)
 			{
+
 				//get the common points
 				MatrixDynamicDense<int> commonPoints = (visibility.row(firstLoop / 3).array().cast<int>() + visibility.row(secondLoop / 3).array().cast<int>()) / 2;
 				
 				tripletView.clear();
 				tripletView.reserve(visibility.row(firstLoop / 3).array().count());
-
+		
 				//get the FIRST view (views passed to PVS are only the first 2 entries of homogeneous coord)
 				//THIS CAN MOST LIKELY BE MOVED OUTSIDE OF THIS LOOP -> MASK THIS MATRIX USING EIGEN??
 				for (size_t i = firstLoop; i < firstLoop + 2; i++)
@@ -800,13 +800,13 @@ namespace P2SFM
 						}
 					}
 				}
-
+		
 				//create firstView
 				firstView.setFromTriplets(tripletView.begin(), tripletView.end());
-
+		
 				tripletView.clear();
 				tripletView.reserve(visibility.row(firstLoop / 3).array().count());
-
+		
 				//get the SECOND view (views passed to PVS are only the first 2 entries of homogeneous coord)
 				for (size_t j= secondLoop; j < secondLoop + 2; j++)	//combine this and iterator loop?
 				{
@@ -820,21 +820,22 @@ namespace P2SFM
 						}
 					}
 				}
-
+		
 				//create secondView
 				secondView.reserve(tripletView.size());
 				secondView.setFromTriplets(tripletView.begin(), tripletView.end());
-
+		
 				//how many commonpoints are there?
 				//if (commonPoints.sum() > options.min_common_init)
 				if (commonPoints.sum() > 0)
 				{
+
 					//set combo current first/second view in view-pairs
 					view_pairs(offset, 0) = firstLoop;
 					view_pairs(offset, 1) = secondLoop;
-
+		
 					PyramidalVisibilityScore pvs_first, pvs_second;
-
+		
 					if (img_size.cols() == 1)	//single entry in img_size
 					{
 						pvs_first = PyramidalVisibilityScore(img_size(0), img_size(1), options.score_level, Eigen::MatrixXd(firstView));
@@ -845,21 +846,21 @@ namespace P2SFM
 						pvs_first = PyramidalVisibilityScore(img_size.coeff(0, firstLoop), img_size.coeff(1, firstLoop), options.score_level, Eigen::MatrixXd(firstView));
 						pvs_second = PyramidalVisibilityScore(img_size(0), img_size(1), options.score_level, Eigen::MatrixXd(secondView));
 					}
-
+		
 					affinity[offset] = pvs_first.ComputeScore(false) + pvs_second.ComputeScore(false);
 					offset++;	//increment offset
 				}
 			}
-
+		
 		}
-
+		
 		//reserved more space/initialized more than was needed -> resize
 		view_pairs = view_pairs.block(0, 0, offset,2);
 		affinity.resize(offset);
 		
 		//sort affinity in descending order -> then reorder view pairs in the same manner
 		EigenHelpers::sortVectorAndMatrix(affinity, view_pairs);
-
+		
 		//return affinity and view_pairs
 		return {affinity,view_pairs};
 	}
