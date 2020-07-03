@@ -368,7 +368,6 @@ namespace P2SFM
 			if (projs.cols() > 0)
 			{
 				Eigen::ArrayXi idx_width, idx_height;
-
 				std::tie(idx_width, idx_height)=CellVisible(projs);
 
 
@@ -377,7 +376,6 @@ namespace P2SFM
 				{
 					//proj_count(idx_height(i), idx_width(i)) = proj_count(idx_height(i), idx_width(i))+1 ; //legacy for dense matrix
 
-					//cannot use tripletlist as using setFromTriplets would override all current values in proj_count
 					proj_count.coeffRef(idx_height(i), idx_width(i)) = proj_count.coeff(idx_height(i), idx_width(i)) +1;
 				}
 
@@ -763,6 +761,9 @@ namespace P2SFM
 		//
 		////implement BOOST?
 		const int num_pairs = (visibility.rows()*(visibility.rows() + 1) ) / 2;
+		std::cout << "VIS ROWS " << visibility.rows() << std::endl;
+		std::cout << "num_pairs " << num_pairs << std::endl;
+
 		std::vector<int> affinity;
 		affinity.resize(num_pairs, 2);
 		
@@ -779,56 +780,58 @@ namespace P2SFM
 			//create a second double for-loop to acquire the second view and then compare the first and second view
 			for (int secondLoop = firstLoop + 3; secondLoop < transposedMat.outerSize(); secondLoop += 3)
 			{
+				std::cout << firstLoop << " " << secondLoop << std::endl;
 
 				//get the common points
-				MatrixDynamicDense<int> commonPoints = (visibility.row(firstLoop / 3).array().cast<int>() + visibility.row(secondLoop / 3).array().cast<int>()) / 2;
-				
-				tripletView.clear();
-				tripletView.reserve(visibility.row(firstLoop / 3).array().count());
-		
-				//get the FIRST view (views passed to PVS are only the first 2 entries of homogeneous coord)
-				//THIS CAN MOST LIKELY BE MOVED OUTSIDE OF THIS LOOP -> MASK THIS MATRIX USING EIGEN??
-				for (size_t i = firstLoop; i < firstLoop + 2; i++)
-				{
-					//k will give data from a single column, construct submatrix from first 3 cols
-					for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator firstIt(transposedMat, i); firstIt; ++firstIt)
-					{
-						//check if corresponding value in 'commonpoints' is true/false
-						if (commonPoints(firstIt.row()) == 1)
-						{
-							tripletView.push_back(Eigen::Triplet<MatrixType, IndexType>(firstIt.col() % 3, firstIt.row(), firstIt.value()));
-						}
-					}
-				}
-		
-				//create firstView
-				firstView.setFromTriplets(tripletView.begin(), tripletView.end());
-		
-				tripletView.clear();
-				tripletView.reserve(visibility.row(firstLoop / 3).array().count());
-		
-				//get the SECOND view (views passed to PVS are only the first 2 entries of homogeneous coord)
-				for (size_t j= secondLoop; j < secondLoop + 2; j++)	//combine this and iterator loop?
-				{
-					//k will give data from a single column, construct submatrix from first 3 cols
-					for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator secondIt(transposedMat, j); secondIt; ++secondIt)
-					{
-						//check if corresponding value in 'commonpoints' is true/false
-						if (commonPoints(secondIt.row()) == 1)
-						{
-							tripletView.push_back(Eigen::Triplet<MatrixType, IndexType>(secondIt.col() % 3, secondIt.row(), secondIt.value()));
-						}
-					}
-				}
-		
-				//create secondView
-				secondView.reserve(tripletView.size());
-				secondView.setFromTriplets(tripletView.begin(), tripletView.end());
-		
+				auto commonPoints = visibility.row(firstLoop / 3) && visibility.row(secondLoop / 3);
 				//how many commonpoints are there?
-				//if (commonPoints.sum() > options.min_common_init)
-				if (commonPoints.sum() > 0)
+				if (commonPoints.count() > options.min_common_init)
 				{
+					std::cout << offset << std::endl;
+
+
+					tripletView.clear();
+					tripletView.reserve(visibility.row(firstLoop / 3).array().count());
+
+					//get the FIRST view (views passed to PVS are only the first 2 entries of homogeneous coord)
+					//THIS CAN MOST LIKELY BE MOVED OUTSIDE OF THIS LOOP -> MASK THIS MATRIX USING EIGEN??
+					for (size_t i = firstLoop; i < firstLoop + 2; i++)
+					{
+						//k will give data from a single column, construct submatrix from first 3 cols
+						for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator firstIt(transposedMat, i); firstIt; ++firstIt)
+						{
+							//check if corresponding value in 'commonpoints' is true/false
+							if (commonPoints(firstIt.row()) == 1)
+							{
+								tripletView.push_back(Eigen::Triplet<MatrixType, IndexType>(firstIt.col() % 3, firstIt.row(), firstIt.value()));
+							}
+						}
+					}
+
+					//create firstView
+					firstView.setFromTriplets(tripletView.begin(), tripletView.end());
+
+					tripletView.clear();
+					tripletView.reserve(visibility.row(firstLoop / 3).array().count());
+
+					//get the SECOND view (views passed to PVS are only the first 2 entries of homogeneous coord)
+					for (size_t j = secondLoop; j < secondLoop + 2; j++)	//combine this and iterator loop?
+					{
+						//k will give data from a single column, construct submatrix from first 3 cols
+						for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator secondIt(transposedMat, j); secondIt; ++secondIt)
+						{
+							//check if corresponding value in 'commonpoints' is true/false
+							if (commonPoints(secondIt.row()) == 1)
+							{
+								tripletView.push_back(Eigen::Triplet<MatrixType, IndexType>(secondIt.col() % 3, secondIt.row(), secondIt.value()));
+							}
+						}
+					}
+
+					//create secondView
+					secondView.reserve(tripletView.size());
+					secondView.setFromTriplets(tripletView.begin(), tripletView.end());
+
 
 					//set combo current first/second view in view-pairs
 					view_pairs(offset, 0) = firstLoop;
@@ -858,9 +861,10 @@ namespace P2SFM
 		view_pairs = view_pairs.block(0, 0, offset,2);
 		affinity.resize(offset);
 		
+
 		//sort affinity in descending order -> then reorder view pairs in the same manner
 		EigenHelpers::sortVectorAndMatrix(affinity, view_pairs);
-		
+
 		//return affinity and view_pairs
 		return {affinity,view_pairs};
 	}
