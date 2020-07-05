@@ -41,11 +41,10 @@ namespace P2SFM
 			//TODO:
 			//can prevent making a copy of the matrix by swapping cols instead and keeping track of where the real one goes
 			MatrixDynamicDense<MatrixType> temp(mat);
-			for (size_t i = 0; i < mat.cols(); i++)
+			for (size_t i = 0; i < mat.rows(); i++)
 			{
-				mat.col(i).swap(temp.col(i));
+				mat.row(i).swap(temp.row(idxVec[i]));
 			}
-
 		}
 
 		bool PointComparison(const Eigen::Vector2i& p1, const Eigen::Vector2i& p2) {
@@ -784,8 +783,10 @@ namespace P2SFM
 				//how many commonpoints are there?
 				if (commonPoints.count() > options.min_common_init)
 				{
-					tripletView.clear();
-					tripletView.reserve(visibility.row(firstLoop / 3).array().count());
+
+					MatrixDynamicDense<MatrixType> firstViewDense(2, visibility.row(firstLoop / 3).array().count());
+					MatrixDynamicDense<MatrixType> secondViewDense(2, visibility.row(secondLoop / 3).array().count());
+
 
 					//get the FIRST view (views passed to PVS are only the first 2 entries of homogeneous coord)
 					//THIS CAN MOST LIKELY BE MOVED OUTSIDE OF THIS LOOP -> MASK THIS MATRIX USING EIGEN??
@@ -800,21 +801,12 @@ namespace P2SFM
 							//check if corresponding value in 'commonpoints' is true/false
 							if (commonPoints(firstIt.row()) == 1)
 							{
-								//tripletView.push_back(Eigen::Triplet<MatrixType, IndexType>(firstIt.col() % 3, firstIt.row(), firstIt.value()));
-								tripletView.push_back(Eigen::Triplet<MatrixType, IndexType>(firstIt.col() % 3, colOffset, firstIt.value()));
+								firstViewDense(firstIt.col() % 3, colOffset) = firstIt.value();
 								colOffset++;
 							}
 						}
 					}
 
-					MatrixColSparse<MatrixType, IndexType> firstView(2, colOffset);
-
-					//create firstView
-					//firstView.resize(2, colOffset);
-					firstView.setFromTriplets(tripletView.begin(), tripletView.end());
-
-					tripletView.clear();
-					tripletView.reserve(visibility.row(firstLoop / 3).array().count());
 
 					//get the SECOND view (views passed to PVS are only the first 2 entries of homogeneous coord)
 					for (size_t j = secondLoop; j < secondLoop + 2; j++)	//combine this and iterator loop?
@@ -827,22 +819,13 @@ namespace P2SFM
 							//check if corresponding value in 'commonpoints' is true/false
 							if (commonPoints(secondIt.row()) == 1)
 							{
-								//tripletView.push_back(Eigen::Triplet<MatrixType, IndexType>(secondIt.col() % 3, secondIt.row(), secondIt.value()));
-								tripletView.push_back(Eigen::Triplet<MatrixType, IndexType>(secondIt.col() % 3, colOffset, secondIt.value()));
+								secondViewDense(secondIt.col() % 3, colOffset) = secondIt.value();
 								colOffset++;
 							}
 						}
 				
 					}
-					MatrixColSparse<MatrixType, IndexType> secondView(2, colOffset);
-
-
-					//create secondView
-					//secondView.resize(2, colOffset);
-					secondView.reserve(tripletView.size());
-					secondView.setFromTriplets(tripletView.begin(), tripletView.end());
-
-
+			
 					//set combo current first/second view in view-pairs
 					view_pairs(offset, 0) = firstLoop/3;
 					view_pairs(offset, 1) = secondLoop/3;
@@ -851,15 +834,14 @@ namespace P2SFM
 		
 					if (img_size.cols() == 1)	//single entry in img_size
 					{
-						//std::cout << img_size(0) << " "<<img_size(1) << " "  << options.score_level << std::endl;
-						//std::cout << Eigen::MatrixXd(firstView) << std::endl;
-						pvs_first = PyramidalVisibilityScore(img_size(0), img_size(1), options.score_level, Eigen::MatrixXd(firstView));
-						pvs_second = PyramidalVisibilityScore(img_size(0), img_size(1), options.score_level, Eigen::MatrixXd(secondView));
+						pvs_first = PyramidalVisibilityScore(img_size(0), img_size(1), options.score_level, firstViewDense);
+						pvs_second = PyramidalVisibilityScore(img_size(0), img_size(1), options.score_level,secondViewDense);
 					}
 					else
 					{
-						pvs_first = PyramidalVisibilityScore(img_size.coeff(0, firstLoop), img_size.coeff(1, firstLoop), options.score_level, Eigen::MatrixXd(firstView));
-						pvs_second = PyramidalVisibilityScore(img_size(0), img_size(1), options.score_level, Eigen::MatrixXd(secondView));
+						pvs_first = PyramidalVisibilityScore(img_size.coeff(0, firstLoop), img_size.coeff(1, firstLoop), options.score_level, firstViewDense);
+						pvs_second = PyramidalVisibilityScore(img_size(0), img_size(1), options.score_level, secondViewDense);
+					
 					}
 		
 					affinity[offset] = pvs_first.ComputeScore(false) + pvs_second.ComputeScore(false);
@@ -874,20 +856,11 @@ namespace P2SFM
 		MatrixDynamicDense<int> pairsResized = view_pairs.block(0, 0, offset,2);
 		affinity.resize(offset);
 
-		std::cout << "VIEW PAIRS: " << pairsResized << std::endl;
-
-		//std::cout << "AFFINITY: " << std::endl;
-		//
-		//for (size_t i = 0; i < affinity.size(); i++)
-		//{
-		//	std::cout << affinity[i] << " ";
-		//}
-
 		//sort affinity in descending order -> then reorder view pairs in the same manner
 		EigenHelpers::sortVectorAndMatrix(affinity, pairsResized);
 
 		//return affinity and view_pairs
-		return {affinity,view_pairs};
+		return {affinity,pairsResized };
 	}
 
 	/*
