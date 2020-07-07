@@ -2,6 +2,7 @@
 
 #include <Eigen/Sparse>
 #include <Eigen/Dense>
+#incldue <Eigen/
 
 #include <algorithm>
 #include <numeric>
@@ -73,6 +74,58 @@ namespace P2SFM
 			return (Array<T>)map;
 		}
 
+		enum ESTIMATION_METHOD
+		{
+			DEFAULT,
+			RANSAC
+		};
+
+		template <typename MatrixType, typename IndexType>
+		std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>>
+		GetViewsCommonPoints(const MatrixColSparse<MatrixType, IndexType>& transposedMat, 
+			const  MatrixDynamicDense<bool>& visibility, const int view1, const int view2)
+		{
+			auto visiblePoints = visibility.row(view1 / 3) && visibility.row(view2 / 3);
+
+			MatrixDynamicDense<MatrixType> firstViewDense(2, visiblePoints.count());
+			MatrixDynamicDense<MatrixType> secondViewDense(2, visiblePoints.count());
+
+			int colOffset = 0;
+			for (size_t i = view1; i < view1 + 2; i++)
+			{
+				colOffset = 0;
+
+				//k will give data from a single column, construct submatrix from first 3 cols
+				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator firstIt(transposedMat, i); firstIt; ++firstIt)
+				{
+					//check if corresponding value in 'commonpoints' is true/false
+					if (visiblePoints(firstIt.row()) == 1)
+					{
+						firstViewDense(firstIt.col() % 3, colOffset) = firstIt.value();
+						colOffset++;
+					}
+				}
+			}
+
+			for (size_t j = view2; j < view2 + 2; j++)
+			{
+				colOffset = 0;
+
+				//k will give data from a single column, construct submatrix from first 3 cols
+				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator secondIt(transposedMat, j); secondIt; ++secondIt)
+				{
+					//check if corresponding value in 'commonpoints' is true/false
+					if (visiblePoints(secondIt.row()) == 1)
+					{
+						secondViewDense(secondIt.col() % 3, colOffset) = secondIt.value();
+						colOffset++;
+					}
+				}
+
+			}
+
+			return { firstViewDense, secondViewDense };
+		}
 	}
 
 	namespace AlgebraHelpers
@@ -141,6 +194,8 @@ namespace P2SFM
 
 			if (isotropic)
 			{
+				std::cout << std::endl << "ISOTROPIC" << std::endl;
+
 				//SUM OF COL (matching x/y value) ,leave out third col if homogenous
 				//scale = sqrt(2) . / mean(sqrt(sum(diff. ^ 2, 1)));
 				// mean every row(sqrt(sum per row(element wise power for every value in diff)))
@@ -167,9 +222,10 @@ namespace P2SFM
 					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i, i, scaleArr[i/3])); //x-scale
 					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+1, i + 1, scaleArr[i/3])); //y-scale
 					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+2, i + 2, (MatrixType)1)); //1
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i, i + 2, -tempArr[i] * scaleArr[i/3]));
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i+1, i + 2, -tempArr[i] * scaleArr[i/3]));
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i, i + 2, -tempArr[i] * scaleArr[i/3]));	   //-centroid.x *  scale
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(i + 1, i + 2, -tempArr[i + 1] * scaleArr[i / 3]));  //-centroid.y *  scale
 				}
+
 
 				transformMat.setFromTriplets(tripletList.begin(), tripletList.end());
 			}
@@ -223,6 +279,8 @@ namespace P2SFM
 
 
 		//construct a matrix
+		//TO-DO:
+		//ADD A MORE INDEPTH DESCRIPTION
 		template <typename MatrixType>
 		inline Eigen::Matrix<MatrixType, 3, 3> CrossProductMatrix(const Eigen::Matrix<MatrixType, 3, 1>& measEntry)
 		{
@@ -232,6 +290,44 @@ namespace P2SFM
 				measEntry.coeff(2, 0), 0, -measEntry.coeff(0, 0),
 				-measEntry.coeff(1, 0), measEntry.coeff(0, 0), 0;
 			return M;
+		}
+
+
+		template <typename MatrixType>
+		void Estimate(const MatrixDynamicDense<MatrixType>& coeffs, )
+		{
+			//[~, ~, fun_vec] = svd(coeffs, 0);
+			//fun_mat = reshape(fun_vec(:, end), 3, 3);
+			//if nargin < 1 || enforce_rank
+			//	[U, S, V] = svd(fun_mat);
+			//S(3, 3) = 0;
+			//fun_mat = U * S*V';
+			//	end
+
+			//singular value decomposition
+		}
+
+		template <typename MatrixType>
+		void RansacEstimate(const MatrixDynamicDense<MatrixType>& coeffs,
+			const double confidence,
+			const int max_iterations,
+			const double distance_threshold)
+		{
+			const int num_projs = coeffs.rows();
+			int best_score = INT_MAX:
+
+			for (size_t i = 0; i <= max_iterations; i++)
+			{
+
+			}
+		}
+
+		template <typename VectorType>
+		Vector<VectorType> LinVec( const Vector<VectorType>& a, const Vector<VectorType>& b)
+		{
+			Vector<VectorType> ret(9);
+			ret << b(0) * a(0), b(0) * a(1), b(0), b(1) * a(0), b(1) * a(1), b(1), a(0), a(1), 1;
+			return ret;
 		}
 
 	}
@@ -561,8 +657,6 @@ namespace P2SFM
 		bool diagnosis_cameras = false; // display the cameras in the 3D model
 	};
 
-
-
 	/*
 	Input:
 		*measEntry : single homogeneous coordinate
@@ -758,7 +852,7 @@ namespace P2SFM
 		const Options& options = Options())
 	{
 		//iterate over the transposed matrix so we go over the matrix row by row
-		MatrixColSparse<MatrixType, IndexType> transposedMat(measurements.transpose());
+		const MatrixColSparse<MatrixType, IndexType> transposedMat(measurements.transpose());
 		
 		//const int numViews = visibility.rows();
 		const int num_pairs = (visibility.rows()*(visibility.rows() + 1) ) / 2;
@@ -784,47 +878,11 @@ namespace P2SFM
 				if (commonPoints.count() > options.min_common_init)
 				{
 
-					MatrixDynamicDense<MatrixType> firstViewDense(2, visibility.row(firstLoop / 3).array().count());
-					MatrixDynamicDense<MatrixType> secondViewDense(2, visibility.row(secondLoop / 3).array().count());
+					//MatrixDynamicDense<MatrixType> firstViewDense(2, visibility.row(firstLoop / 3).array().count());
+					//MatrixDynamicDense<MatrixType> secondViewDense(2, visibility.row(secondLoop / 3).array().count());
+					MatrixDynamicDense<MatrixType> firstViewDense, secondViewDense;
 
-
-					//get the FIRST view (views passed to PVS are only the first 2 entries of homogeneous coord)
-					//THIS CAN MOST LIKELY BE MOVED OUTSIDE OF THIS LOOP -> MASK THIS MATRIX USING EIGEN??
-					int colOffset = 0;
-					for (size_t i = firstLoop; i < firstLoop + 2; i++)
-					{
-						colOffset = 0;
-
-						//k will give data from a single column, construct submatrix from first 3 cols
-						for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator firstIt(transposedMat, i); firstIt; ++firstIt)
-						{
-							//check if corresponding value in 'commonpoints' is true/false
-							if (commonPoints(firstIt.row()) == 1)
-							{
-								firstViewDense(firstIt.col() % 3, colOffset) = firstIt.value();
-								colOffset++;
-							}
-						}
-					}
-
-
-					//get the SECOND view (views passed to PVS are only the first 2 entries of homogeneous coord)
-					for (size_t j = secondLoop; j < secondLoop + 2; j++)	//combine this and iterator loop?
-					{
-						colOffset = 0;
-
-						//k will give data from a single column, construct submatrix from first 3 cols
-						for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator secondIt(transposedMat, j); secondIt; ++secondIt)
-						{
-							//check if corresponding value in 'commonpoints' is true/false
-							if (commonPoints(secondIt.row()) == 1)
-							{
-								secondViewDense(secondIt.col() % 3, colOffset) = secondIt.value();
-								colOffset++;
-							}
-						}
-				
-					}
+					std::tie(firstViewDense,secondViewDense) = EigenHelpers::GetViewsCommonPoints(transposedMat, visibility, firstLoop, secondLoop);
 			
 					//set combo current first/second view in view-pairs
 					view_pairs(offset, 0) = firstLoop/3;
@@ -864,30 +922,107 @@ namespace P2SFM
 	}
 
 	/*
+	Estimate, possibly robustly, the fundamental matrix between two images containing matched projections.
+	No normalisation is done, the projections matrices should be provided normalized.
+	This implementation uses the 8 points algorithm, so at least 8 projections are required.
+	
+	Input:
+		* projs1, the projections in the first image(2xN, N > 8)
+		* projs2, the corresponding projections in the second image (2xN)
+		* method, method for robust estimation if wanted(currently only support 'ransac', an optimized implementation of RANSAC with MSAC score)
+		* confidence, the confidence to stop robust estimation early in RANSAC
+	    * max_iter, the maximum number of iterations in RANSAC
+	    * dist_thresh, the distance threshold for computing inliers in RANSAC
+	Output:
+		* fund_mat, the estimated fundamental matrix(3x3)
+		* inliers, a binary or index vector indicating the projections used in the estimation
+	*/
+	template <typename MatrixType>
+	void EstimateFundamentalMat(const MatrixDynamicDense<MatrixType>& projs1, 
+		const MatrixDynamicDense<MatrixType> projs2,
+		const EigenHelpers::ESTIMATION_METHOD method = EigenHelpers::ESTIMATION_METHOD::DEFAULT,
+		const double confidence = 99.0,
+		const int max_iterations = 1000,
+		const double distance_threshold = 1e-5)
+	{
+		//make sure projs are of the correct, corresponding formats
+		if (projs1.rows() != 2)
+		{
+			std::cout << "EstimateFundamentalMat: incorrect size for PROJS1 ROWS";
+		}
+		else if(projs1.cols() < 8)
+		{
+			std::cout << "EstimateFundamentalMat: PROJECTIONS NEED AT LEAST 8 COLUMNS";
+		}
+		else if (projs1.rows() != projs2.rows() || projs1.cols() != projs2.cols())
+		{
+			std::cout << "EstimateFundamentalMat: The projections matrices must have the same size (2xN)";
+		}
+
+
+		MatrixDynamicDense<MatrixType> coeffs(projs1.cols(),9);
+		//create array 'coeffs'
+		for (size_t i = 0; i < projs1.cols(); i++)
+		{
+
+			coeffs.row(i) = AlgebraHelpers::LinVec((Vector<MatrixType>)projs2.col(i), (Vector<MatrixType>)projs1.col(i));
+		}
+
+
+		switch (method)
+		{
+		case EigenHelpers::ESTIMATION_METHOD::RANSAC:
+
+			break;
+		case EigenHelpers::ESTIMATION_METHOD::DEFAULT:
+
+				break;
+		default:
+			break;
+		}
+	}
+
+	/*
 	Find and solve an initial stereo subproblem to start the reconstruction.
 		
-		   Input:
-		 * norm_meas : Normalized measurements of the projections(3FxN)
-		 * visible : Visibility matrix binary mask(FxN)
-		 * view_pairs : Valid pairs of initial images sorted by affinity(Kx2)
-		 * affinity : Affinity score for the valid pairs of initial images(Kx1)
-		 * estimated_views : Views that have already been estimated
-		     * options : Structure containing options(must be initialized by ppsfm_options to contains all necessary fields)
-		 Output :
-		     * cameras : Projective estimation of the initial cameras(6x4)
-		 * points : Projective estimation of the initial points(4xK)
-		 * pathway : Array containing the order in which views(negative) and points(positive) has been added(1 x 2 + K)
-		 * fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points(1 x 2 + K)
-		 */
+	Input:
+		* norm_meas : Normalized measurements of the projections (3FxN)
+		* visible : Visibility matrix binary mask (FxN)
+		* view_pairs : Valid pairs of initial images sorted by affinity (Kx2)
+		* affinity : Affinity score for the valid pairs of initial images (Kx1)
+		* estimated_views : Views that have already been estimated (Kx2)
+		* options : Structure containing options, can be left blank to initialise with default values
+	Output :
+		* cameras : Projective estimation of the initial cameras (6x4)
+		* points : Projective estimation of the initial points (4xK)
+		* pathway : Array containing the order in which views(negative) and points(positive) has been added (1 x 2 + K)
+		* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points (1 x 2 + K)
+	*/
 	template <typename MatrixType, typename IndexType>
 	void Initialisation(
-		MatrixColSparse<MatrixType, IndexType> norm_meas,
+		const MatrixColSparse<MatrixType, IndexType>& norm_meas,
 		const MatrixDynamicDense<bool>& visibility, 
-		std::vector<int> affinity, 
-		MatrixDynamicDense<int> view_pairs, 
-		/*estimated_views,*/
+		const std::vector<int>& affinity, 
+		const MatrixDynamicDense<int>& view_pairs, 
+		const MatrixDynamicDense<int>& estimated_views = MatrixDynamicDense<int>(0,0),
 		const Options& options = Options())
 	{
-	
+		MatrixColSparse<MatrixType, IndexType> transposedMat(norm_meas.transpose());
+
+		//match row in estimated_views and view_pairs
+		//find matches 
+		for (size_t i = 0; i < view_pairs.rows(); i++)
+		{
+			int firstViewRow = view_pairs(i, 0);
+			int secondViewRow = view_pairs(i, 1);
+
+			std::cout << "FIRST VIWE ROW: " << firstViewRow << " SECOND VIEW ROW: " << secondViewRow << std::endl;
+
+			//get visible points norm meas for both first and second views and estimate fundamental mat from that
+			MatrixDynamicDense<MatrixType> firstViewDense, secondViewDense;
+			std::tie(firstViewDense,secondViewDense) = EigenHelpers::GetViewsCommonPoints(transposedMat, visibility, 3 * firstViewRow, 3 * secondViewRow);
+
+			EstimateFundamentalMat(firstViewDense,secondViewDense,EigenHelpers::ESTIMATION_METHOD::RANSAC, 99.99, 1000, 1e-3);
+		}
 	}
 }
