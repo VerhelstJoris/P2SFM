@@ -2,7 +2,7 @@
 
 #include <Eigen/Sparse>
 #include <Eigen/Dense>
-#incldue <Eigen/
+#include <Eigen/SVD>
 
 #include <algorithm>
 #include <numeric>
@@ -292,21 +292,72 @@ namespace P2SFM
 			return M;
 		}
 
-
+		//TO-DO:
+		//ADD A MORE INDEPTH DESCRIPTION
 		template <typename MatrixType>
-		void Estimate(const MatrixDynamicDense<MatrixType>& coeffs, )
+		MatrixDynamicDense<MatrixType> Estimate(const MatrixDynamicDense<MatrixType>& coeffs, bool enforceRank=true)
 		{
-			//[~, ~, fun_vec] = svd(coeffs, 0);
-			//fun_mat = reshape(fun_vec(:, end), 3, 3);
-			//if nargin < 1 || enforce_rank
-			//	[U, S, V] = svd(fun_mat);
-			//S(3, 3) = 0;
-			//fun_mat = U * S*V';
-			//	end
-
 			//singular value decomposition
+			//BDCSVD implementation is preferred for larger matrices (>16)
+			//ComputeFullV because the very last column is the one wanted
+			Eigen::BDCSVD<MatrixDynamicDense<MatrixType>> svd(coeffs, Eigen::ComputeFullV);
+
+			//get last col -svd.matrixV() and put in 3*3 matrix
+			MatrixDynamicDense<MatrixType> fundamental_matrix(3, 3);
+			auto lastCol = svd.matrixV().col(svd.matrixV().cols() - 1);
+			fundamental_matrix << lastCol(0), lastCol(3), lastCol(6),
+				lastCol(1), lastCol(4), lastCol(7),
+				lastCol(2), lastCol(5), lastCol(8);
+			std::cout << "FUNDAMENTAL MATRIX" << std::endl << fundamental_matrix;	//correct
+
+			//is this still needed?
+			if (coeffs.rows() <= coeffs.cols())
+			{
+				//m <= n — svd(A,0) is equivalent to svd(A) MATLAB
+			}
+			else
+			{
+				//m > n — svd(A, 0) is equivalent to svd(A, 'econ').
+				//[U,S,V] = svd(A,'econ') produces an economy-size decomposition of m-by-n matrix A:
+				//m > n — Only the first n columns of U are computed, and S is n - by - n.
+				//m = n — svd(A, 'econ') is equivalent to svd(A).
+				//m < n — Only the first m columns of V are computed, and S is m - by - m.
+				if (coeffs.rows() > coeffs.cols())
+				{
+				}
+				else if (coeffs.rows() < coeffs.cols())
+				{
+				}
+				else
+				{
+				}
+			}
+
+			if (enforceRank)
+			{
+				//JacobiSVD is preferable for smaller matrices
+				//thin or full should have no effect as we're working with a 3x3 mat
+				Eigen::JacobiSVD<MatrixDynamicDense<MatrixType>> svd2(fundamental_matrix, Eigen::ComputeFullU|Eigen::ComputeFullV);
+				
+				MatrixDynamicDense<MatrixType> singularMat(3, 3);	//plug singular values in matrix for use in calculations
+				singularMat << svd2.singularValues()[0], 0, 0,
+					0, svd2.singularValues()[1], 0,
+					0, 0, 0;
+
+				//col 1 and 3 wrong sign for these 2 but this does not matter in next calculation
+				MatrixDynamicDense<MatrixType> matU = svd2.matrixU();
+				MatrixDynamicDense<MatrixType> matV = svd2.matrixV();
+
+				matV.transposeInPlace();
+
+				fundamental_matrix = matU *  singularMat * matV;
+			}
+		
+			return fundamental_matrix;
 		}
 
+		//TO-DO:
+		//ADD A MORE INDEPTH DESCRIPTION
 		template <typename MatrixType>
 		void RansacEstimate(const MatrixDynamicDense<MatrixType>& coeffs,
 			const double confidence,
@@ -314,7 +365,7 @@ namespace P2SFM
 			const double distance_threshold)
 		{
 			const int num_projs = coeffs.rows();
-			int best_score = INT_MAX:
+			int best_score = INT_MAX;
 
 			for (size_t i = 0; i <= max_iterations; i++)
 			{
@@ -964,7 +1015,6 @@ namespace P2SFM
 		//create array 'coeffs'
 		for (size_t i = 0; i < projs1.cols(); i++)
 		{
-
 			coeffs.row(i) = AlgebraHelpers::LinVec((Vector<MatrixType>)projs2.col(i), (Vector<MatrixType>)projs1.col(i));
 		}
 
@@ -973,10 +1023,14 @@ namespace P2SFM
 		{
 		case EigenHelpers::ESTIMATION_METHOD::RANSAC:
 
+			AlgebraHelpers::Estimate(coeffs);
+
 			break;
 		case EigenHelpers::ESTIMATION_METHOD::DEFAULT:
-
-				break;
+			
+			AlgebraHelpers::Estimate(coeffs);
+			
+			break;
 		default:
 			break;
 		}
@@ -1015,8 +1069,6 @@ namespace P2SFM
 		{
 			int firstViewRow = view_pairs(i, 0);
 			int secondViewRow = view_pairs(i, 1);
-
-			std::cout << "FIRST VIWE ROW: " << firstViewRow << " SECOND VIEW ROW: " << secondViewRow << std::endl;
 
 			//get visible points norm meas for both first and second views and estimate fundamental mat from that
 			MatrixDynamicDense<MatrixType> firstViewDense, secondViewDense;
