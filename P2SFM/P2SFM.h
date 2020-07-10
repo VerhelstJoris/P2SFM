@@ -17,6 +17,7 @@ template <typename ScalarType, typename IndexType> using MatrixColSparse = Eigen
 
 //vector Template
 template <typename Type> using Vector = Eigen::Matrix<Type,1, Eigen::Dynamic>;
+template <typename Type> using VectorVertical = Eigen::Matrix<Type, Eigen::Dynamic,1>;
 //array template
 template <typename Type> using Array = Eigen::Array<Type, 1, Eigen::Dynamic>;
 
@@ -194,8 +195,6 @@ namespace P2SFM
 
 			if (isotropic)
 			{
-				std::cout << std::endl << "ISOTROPIC" << std::endl;
-
 				//SUM OF COL (matching x/y value) ,leave out third col if homogenous
 				//scale = sqrt(2) . / mean(sqrt(sum(diff. ^ 2, 1)));
 				// mean every row(sqrt(sum per row(element wise power for every value in diff)))
@@ -308,69 +307,176 @@ namespace P2SFM
 			fundamental_matrix << lastCol(0), lastCol(3), lastCol(6),
 				lastCol(1), lastCol(4), lastCol(7),
 				lastCol(2), lastCol(5), lastCol(8);
-			std::cout << "FUNDAMENTAL MATRIX" << std::endl << fundamental_matrix;	//correct
 
 			//is this still needed?
-			if (coeffs.rows() <= coeffs.cols())
-			{
-				//m <= n — svd(A,0) is equivalent to svd(A) MATLAB
-			}
-			else
-			{
-				//m > n — svd(A, 0) is equivalent to svd(A, 'econ').
-				//[U,S,V] = svd(A,'econ') produces an economy-size decomposition of m-by-n matrix A:
-				//m > n — Only the first n columns of U are computed, and S is n - by - n.
-				//m = n — svd(A, 'econ') is equivalent to svd(A).
-				//m < n — Only the first m columns of V are computed, and S is m - by - m.
-				if (coeffs.rows() > coeffs.cols())
-				{
-				}
-				else if (coeffs.rows() < coeffs.cols())
-				{
-				}
-				else
-				{
-				}
-			}
+			//if (coeffs.rows() <= coeffs.cols())
+			//{
+			//	//m <= n — svd(A,0) is equivalent to svd(A) MATLAB
+			//	std::cout << "CLWONS";
+			//	auto lastCol = svd.matrixV().col(svd.matrixV().cols() - 1);
+			//	fundamental_matrix << lastCol(0), lastCol(3), lastCol(6),
+			//		lastCol(1), lastCol(4), lastCol(7),
+			//		lastCol(2), lastCol(5), lastCol(8);
+			//}
+			//else
+			//{
+			//	//m > n — svd(A, 0) is equivalent to svd(A, 'econ').
+			//	//[U,S,V] = svd(A,'econ') produces an economy-size decomposition of m-by-n matrix A:
+			//	//m > n — Only the first n columns of U are computed, and S is n - by - n.
+			//	//m = n — svd(A, 'econ') is equivalent to svd(A).
+			//	//m < n — Only the first m columns of V are computed, and S is m - by - m.
+			//
+			//	//work with the m>n case as amount of rows should be a lot more than amount of cols
+			//	auto lastCol = svd.matrixV().col(coeffs.rows());
+			//	fundamental_matrix << lastCol(0), lastCol(3), lastCol(6),
+			//		lastCol(1), lastCol(4), lastCol(7),
+			//		lastCol(2), lastCol(5), lastCol(8);
+			//	
+			//}
 
 			if (enforceRank)
 			{
 				//JacobiSVD is preferable for smaller matrices
 				//thin or full should have no effect as we're working with a 3x3 mat
-				Eigen::JacobiSVD<MatrixDynamicDense<MatrixType>> svd2(fundamental_matrix, Eigen::ComputeFullU|Eigen::ComputeFullV);
-				
+				Eigen::JacobiSVD<MatrixDynamicDense<MatrixType>> svd2(fundamental_matrix, Eigen::ComputeFullU | Eigen::ComputeFullV);
+			
 				MatrixDynamicDense<MatrixType> singularMat(3, 3);	//plug singular values in matrix for use in calculations
 				singularMat << svd2.singularValues()[0], 0, 0,
 					0, svd2.singularValues()[1], 0,
 					0, 0, 0;
-
+			
 				//col 1 and 3 wrong sign for these 2 but this does not matter in next calculation
 				MatrixDynamicDense<MatrixType> matU = svd2.matrixU();
 				MatrixDynamicDense<MatrixType> matV = svd2.matrixV();
-
+			
 				matV.transposeInPlace();
-
-				fundamental_matrix = matU *  singularMat * matV;
+			
+				fundamental_matrix = matU * singularMat * matV;
 			}
-		
+
 			return fundamental_matrix;
 		}
 
 		//TO-DO:
 		//ADD A MORE INDEPTH DESCRIPTION
 		template <typename MatrixType>
-		void RansacEstimate(const MatrixDynamicDense<MatrixType>& coeffs,
+		std::tuple<VectorVertical<MatrixType>, MatrixDynamicDense<MatrixType>(3,3)>
+			RansacEstimate(const MatrixDynamicDense<MatrixType>& coeffs,
 			const double confidence,
 			const int max_iterations,
 			const double distance_threshold)
 		{
 			const int num_projs = coeffs.rows();
 			int best_score = INT_MAX;
+			VectorVertical<MatrixType> best_inliers(num_projs);
+			MatrixDynamicDense<MatrixType> best_estim(3, 3);
 
-			for (size_t i = 0; i <= max_iterations; i++)
+			int last_iteration = max_iterations;	//use in for-loop -> can be changed
+
+			double log_conf = log(1 - confidence / 100);
+
+			std::vector<int> test_set(8,-1); //initialize to -1
+
+			for (size_t i = 0; i <= last_iteration; i++)
 			{
+				//create random permutation of 8 values between 0 - (num_projs-1) without repeating elements
+				std::generate(test_set.begin(), test_set.end(), [num_projs,&test_set]() 
+				{ 
+					int num;
+					do
+					{
+						num = rand() % (num_projs - 1);
+					} while (std::find(test_set.begin(),test_set.end(),num)!=test_set.end());
+					
+					return num; 
+				});
 
+				//std::vector<int> test_set{ 12, 89, 93, 102, 124, 136, 106, 79 };	//TEST SET
+
+				//create 'submatrix' coeffs with only the test set rows
+				MatrixDynamicDense<MatrixType> subMat(8, coeffs.cols());
+
+
+				for (size_t j = 0; j < test_set.size(); j++)
+				{
+					subMat.row(j) = coeffs.row(test_set[j]);
+				}
+
+
+				auto estimation = Estimate(subMat, false);
+				//estimation to col vector order [0 3 6 1 4 7 2 5 8]
+				VectorVertical<MatrixType> estimateVec(9);
+				estimateVec << estimation(0, 0), estimation(1, 0), estimation(2, 0),
+					estimation(0, 1), estimation(1, 1), estimation(2, 1),
+					estimation(0, 2), estimation(1, 2), estimation(2, 2);
+
+				//std::cout << std::endl << "estimate: " << estimateVec << std::endl;
+				//std::cout << std::endl << "submat: " << std::endl << subMat << std::endl;
+				//std::cout << std::endl << "distance match: " << std::endl << (subMat * estimateVec).norm() / sqrt(8) << std::endl;
+
+				if ((subMat * estimateVec).norm() / sqrt(8) < distance_threshold)	//THIS MIGHT NOT BE CORRECT YET
+				{
+					//move down into loop
+					VectorVertical<MatrixType> errors = (coeffs * estimateVec).array().pow(2);
+					VectorVertical<MatrixType> inliers(errors.rows());
+					inliers.setZero();
+					inliers = (errors.array() < distance_threshold).select(errors, inliers);
+
+					//inliers.nonzeros() does not work as expected with dense matrices
+					int nnzCount = (inliers.array() != MatrixType(0) ).count();
+					double score = inliers.array().sum() + (inliers.rows() - nnzCount) * distance_threshold;
+
+					std::cout << "SCORE: " << score << " NNZ_COUNT: " << nnzCount << std::endl;
+
+					//is this the best match yet? (with enough elements present)
+					if (nnzCount > 8 && score < 7 * best_score)
+					{
+						//estimate all inliers coeffs	
+						//reuse subMat for this
+						subMat.resize(nnzCount, coeffs.cols());
+						int count = 0;
+						for (size_t j = 0; j < inliers.size(); j++)	//get all rows from coeffs that are inliers
+						{
+							if(inliers[j] != 0)
+							{
+								subMat.row(count) = coeffs.row(j);	
+								count++;
+							}
+						}
+
+						//can reuse old estimation var as we know the output matrix is 3x3
+						estimation = Estimate(subMat, false);
+						estimateVec << estimation(0, 0), estimation(1, 0), estimation(2, 0),
+							estimation(0, 1), estimation(1, 1), estimation(2, 1),
+							estimation(0, 2), estimation(1, 2), estimation(2, 2);
+
+						errors.resize(subMat.rows(), 1);
+						errors = (subMat * estimateVec).array().pow(2);
+
+						score = errors.array().sum() + (inliers.rows() - nnzCount)*distance_threshold;
+
+						//the lower the score the better, save best for return
+						if (score < best_score)
+						{
+							best_score = score;
+							best_estim = estimation;
+							best_inliers = inliers;
+
+							//adaptive maximum numbers of iterations
+							double ratio = (double)nnzCount / num_projs;
+							const double minVal = std::pow(2, -52);	//min difference between 2 values in matlab
+							double prob = std::max(minVal, std::min(1 - minVal, 1 - std::pow(ratio,8))); //clamp the ratio value
+
+
+							last_iteration = std::min(int(std::ceil(log_conf / log(prob))), max_iterations);
+						}
+					}
+
+				}
 			}
+
+
+			return { best_inliers ,best_estim };
 		}
 
 		template <typename VectorType>
@@ -1001,7 +1107,7 @@ namespace P2SFM
 		{
 			std::cout << "EstimateFundamentalMat: incorrect size for PROJS1 ROWS";
 		}
-		else if(projs1.cols() < 8)
+		else if(projs1.cols() < 10)
 		{
 			std::cout << "EstimateFundamentalMat: PROJECTIONS NEED AT LEAST 8 COLUMNS";
 		}
@@ -1018,17 +1124,20 @@ namespace P2SFM
 			coeffs.row(i) = AlgebraHelpers::LinVec((Vector<MatrixType>)projs2.col(i), (Vector<MatrixType>)projs1.col(i));
 		}
 
-
+		MatrixDynamicDense<MatrixType> fundMat(3,3);
 		switch (method)
 		{
 		case EigenHelpers::ESTIMATION_METHOD::RANSAC:
 
-			AlgebraHelpers::Estimate(coeffs);
+			MatrixDynamicDense<MatrixType> fundamentalMat(3,3);
+			VectorVertical
+			std::tie() = EigenHelpers::RansacEstimate(coeffs,confidence,max_iterations,distance_threshold);
+			Eigen::JacobiSVD<MatrixDynamicDense<MatrixType>> svd
 
 			break;
 		case EigenHelpers::ESTIMATION_METHOD::DEFAULT:
 			
-			AlgebraHelpers::Estimate(coeffs);
+			 fundMat = AlgebraHelpers::Estimate(coeffs,true);
 			
 			break;
 		default:
