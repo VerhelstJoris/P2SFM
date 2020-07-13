@@ -127,6 +127,28 @@ namespace P2SFM
 
 			return { firstViewDense, secondViewDense };
 		}
+
+
+		//get a homogenous coordinate located at 'col' with the first row being startRow
+		template <typename MatrixType, typename IndexType>
+		Eigen::Matrix<MatrixType, 3, 1> GetMeasurementFromView(const MatrixColSparse<MatrixType, IndexType>& mat, const int startRow, const int col)
+		{
+			Eigen::Matrix<MatrixType, 3, 1> retVec;
+
+			int count = 0;
+			for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(mat, col); it; ++it)	//jump to correct col
+			{
+				if (it.row() / 3 == startRow)	//wanted row?
+				{
+					retVec(it.row() % 3) = it.value();
+					count++;
+					if (count == 3)
+						break;
+				}
+			}
+
+			return retVec;
+		}
 	}
 
 	namespace AlgebraHelpers
@@ -360,7 +382,7 @@ namespace P2SFM
 		//TO-DO:
 		//ADD A MORE INDEPTH DESCRIPTION
 		template <typename MatrixType>
-		std::tuple<VectorVertical<MatrixType>, MatrixDynamicDense<MatrixType>(3,3)>
+		std::tuple<VectorVertical<MatrixType>, MatrixDynamicDense<MatrixType>>
 			RansacEstimate(const MatrixDynamicDense<MatrixType>& coeffs,
 			const double confidence,
 			const int max_iterations,
@@ -375,23 +397,23 @@ namespace P2SFM
 
 			double log_conf = log(1 - confidence / 100);
 
-			std::vector<int> test_set(8,-1); //initialize to -1
+			//std::vector<int> test_set(8,-1); //initialize to -1
 
 			for (size_t i = 0; i <= last_iteration; i++)
 			{
 				//create random permutation of 8 values between 0 - (num_projs-1) without repeating elements
-				std::generate(test_set.begin(), test_set.end(), [num_projs,&test_set]() 
-				{ 
-					int num;
-					do
-					{
-						num = rand() % (num_projs - 1);
-					} while (std::find(test_set.begin(),test_set.end(),num)!=test_set.end());
-					
-					return num; 
-				});
+				//std::generate(test_set.begin(), test_set.end(), [num_projs,&test_set]() 
+				//{ 
+				//	int num;
+				//	do
+				//	{
+				//		num = rand() % (num_projs - 1);
+				//	} while (std::find(test_set.begin(),test_set.end(),num)!=test_set.end());
+				//	
+				//	return num; 
+				//});
 
-				//std::vector<int> test_set{ 12, 89, 93, 102, 124, 136, 106, 79 };	//TEST SET
+				std::vector<int> test_set{ 12, 89, 93, 102, 124, 136, 106, 79 };	//TEST SET
 
 				//create 'submatrix' coeffs with only the test set rows
 				MatrixDynamicDense<MatrixType> subMat(8, coeffs.cols());
@@ -426,7 +448,7 @@ namespace P2SFM
 					int nnzCount = (inliers.array() != MatrixType(0) ).count();
 					double score = inliers.array().sum() + (inliers.rows() - nnzCount) * distance_threshold;
 
-					std::cout << "SCORE: " << score << " NNZ_COUNT: " << nnzCount << std::endl;
+					//std::cout << "SCORE: " << score << " NNZ_COUNT: " << nnzCount << std::endl;
 
 					//is this the best match yet? (with enough elements present)
 					if (nnzCount > 8 && score < 7 * best_score)
@@ -1095,7 +1117,8 @@ namespace P2SFM
 		* inliers, a binary or index vector indicating the projections used in the estimation
 	*/
 	template <typename MatrixType>
-	void EstimateFundamentalMat(const MatrixDynamicDense<MatrixType>& projs1, 
+	std::tuple< MatrixDynamicDense<MatrixType>, VectorVertical<MatrixType>>
+		EstimateFundamentalMat(const MatrixDynamicDense<MatrixType>& projs1,
 		const MatrixDynamicDense<MatrixType> projs2,
 		const EigenHelpers::ESTIMATION_METHOD method = EigenHelpers::ESTIMATION_METHOD::DEFAULT,
 		const double confidence = 99.0,
@@ -1103,17 +1126,30 @@ namespace P2SFM
 		const double distance_threshold = 1e-5)
 	{
 		//make sure projs are of the correct, corresponding formats
+		//break here somehow
+		MatrixDynamicDense<MatrixType> fundMat(3, 3);
+		fundMat.setZero();
+		VectorVertical<MatrixType> inliers(projs1.cols());
+		inliers.setZero();
+
+		//should not reach here-> do outside of the function
 		if (projs1.rows() != 2)
 		{
-			std::cout << "EstimateFundamentalMat: incorrect size for PROJS1 ROWS";
+			std::cout << std::endl << "EstimateFundamentalMat: incorrect size for PROJS1 ROWS" << std::endl;
+			return { fundMat,inliers };
+
 		}
 		else if(projs1.cols() < 10)
 		{
-			std::cout << "EstimateFundamentalMat: PROJECTIONS NEED AT LEAST 8 COLUMNS";
+			std::cout << std::endl << "EstimateFundamentalMat: PROJECTIONS NEED AT LEAST 8 COLUMNS" << std::endl;
+			return { fundMat, inliers };
+
 		}
 		else if (projs1.rows() != projs2.rows() || projs1.cols() != projs2.cols())
 		{
-			std::cout << "EstimateFundamentalMat: The projections matrices must have the same size (2xN)";
+			std::cout << std::endl << "EstimateFundamentalMat: The projections matrices must have the same size (2xN)" << std::endl;
+			return { fundMat,inliers };
+
 		}
 
 
@@ -1124,26 +1160,142 @@ namespace P2SFM
 			coeffs.row(i) = AlgebraHelpers::LinVec((Vector<MatrixType>)projs2.col(i), (Vector<MatrixType>)projs1.col(i));
 		}
 
-		MatrixDynamicDense<MatrixType> fundMat(3,3);
 		switch (method)
 		{
 		case EigenHelpers::ESTIMATION_METHOD::RANSAC:
+		{
+			MatrixDynamicDense<MatrixType> fundamentalMat(3, 3);
+			std::tie(inliers, fundamentalMat) = AlgebraHelpers::RansacEstimate(coeffs, confidence, max_iterations, distance_threshold);
+			Eigen::JacobiSVD<MatrixDynamicDense<MatrixType>> svd(fundamentalMat, Eigen::ComputeFullU | Eigen::ComputeFullV);
 
-			MatrixDynamicDense<MatrixType> fundamentalMat(3,3);
-			VectorVertical
-			std::tie() = EigenHelpers::RansacEstimate(coeffs,confidence,max_iterations,distance_threshold);
-			Eigen::JacobiSVD<MatrixDynamicDense<MatrixType>> svd
+			MatrixDynamicDense<MatrixType> singularMat(2, 2);	//plug singular values in matrix for use in calculations
+			singularMat << svd.singularValues()[0], 0,
+				0, svd.singularValues()[1];
+			MatrixDynamicDense<MatrixType> matV = svd.matrixV().block(0,0,3,2);
 
-			break;
+			matV.transposeInPlace();
+			
+			fundMat = svd.matrixU().block(0, 0, 3, 2) * singularMat * 	matV;
+
+			break; 
+		}
 		case EigenHelpers::ESTIMATION_METHOD::DEFAULT:
-			
-			 fundMat = AlgebraHelpers::Estimate(coeffs,true);
-			
+		{
+			fundMat = AlgebraHelpers::Estimate(coeffs, true);
+			inliers.setOnes();
+		}
 			break;
 		default:
 			break;
 		}
+
+		// We estimated F_21 instead of F_12 -> transpose
+		fundMat.transposeInPlace();
+		return {  fundMat,inliers };
 	}
+
+	//TODO: ADD A MORE DETAILED DESCRIPTION
+	template <typename MatrixType, typename IndexType>
+	std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>, MatrixDynamicDense<int>, Vector<int> >
+	ComputeCamPts(
+		const MatrixColSparse<MatrixType, IndexType>& norm_meas,
+		const Vector<int>& initial_points,
+		const MatrixDynamicDense<MatrixType>& fundamental_mat,
+		const Eigen::Vector2i initial_views)
+	{
+		//singular value decomposition
+		Eigen::JacobiSVD<MatrixDynamicDense<MatrixType>> svd(fundamental_mat, Eigen::ComputeFullV);
+		Eigen::Matrix<MatrixType, 3, 1> epipole = svd.matrixV().block(0, 2, 3, 1) * -1;
+
+		//create 'empty' matrix to store projective depths into
+		MatrixDynamicDense<MatrixType> proj_depths(2, initial_points.size());
+		proj_depths.setOnes();
+
+		for (size_t i = 0; i < initial_points.size(); i++)
+		{
+			//get a certain column from second view in sparse norm_meas
+			Eigen::Matrix<MatrixType, 3, 1> firstViewCoord = EigenHelpers::GetMeasurementFromView(norm_meas, initial_views(0), initial_points[i]);
+			Eigen::Matrix<MatrixType, 3, 1> secondViewCoord=EigenHelpers::GetMeasurementFromView(norm_meas,initial_views(1),initial_points[i]);
+			
+			Eigen::Matrix<MatrixType, 3, 1> point_epipole = secondViewCoord.cross(epipole);	//cross product value
+
+			//set value in proj_depths
+			//0-th index as Eigen cannot verify if the result will be a single scalar at compile time
+			proj_depths.coeffRef(1, i) = abs(((firstViewCoord.transpose() * fundamental_mat * point_epipole) / (point_epipole.transpose() * point_epipole))(0));
+		}
+
+		//second row of proj_depth/ (sum first 2 elements second row) *2
+		proj_depths.row(1) = proj_depths.row(1) / (proj_depths.coeff(1, 0) + proj_depths.coeff(1, 1)) * 2;
+
+		//starting from third measurement (divide cols by their own average)*2
+		for (size_t i = 2; i < initial_points.size(); i++)
+		{
+			proj_depths.col(i) = proj_depths.col(i) / (proj_depths.coeff(0, i) + proj_depths.coeff(1, i)) * 2;
+		}
+
+
+		//WHAT IS THIS VAR?
+		Vector<int> pathway(initial_points.size() + 2);
+		// intial views are added to initial points between element 0-1 and 1-2
+		pathway << initial_points(0), -initial_views(0), initial_points(1), -initial_views(1), initial_points.block(0, 2, 1, initial_points.cols() - 2);//rest of initial_points
+
+		MatrixDynamicDense<int> fixed( 2, initial_points.size() + 2);
+		fixed.setZero();
+		fixed.coeffRef(0, 0) = initial_views(0);
+		fixed.coeffRef(0, 1) = initial_points(0);
+		fixed.coeffRef(0, 2) = initial_views(0);
+
+		fixed.coeffRef(0, 3) = initial_points(0);
+		fixed.coeffRef(1, 3) = initial_points(1);
+		for (size_t i = 4; i < fixed.cols(); i++)
+		{
+			fixed.col(i) = initial_views;
+		}
+
+		//get full rows first/second view with all cols in initial points
+		MatrixDynamicDense<MatrixType> scaled_meas(6, initial_points.size());;
+
+		for (size_t i = 3*initial_views(0); i < 3 * initial_views(0)+3; i++)
+		{
+			//only get col id's present in initial points
+			//this is possible in the dev branch of Eigen but not in current stable version (3.3)
+			//TODO: REPLACE ONCE EIGEN RECEIVES AN UPDATE TO THE STABLE RELEASE
+			for (size_t j = 0; j < initial_points.size(); j++)
+			{
+				//element wise multiplication with the corresponding element in proj_depths
+				scaled_meas(i % 3, j) = norm_meas.coeff(i, initial_points[j]) * proj_depths(0,j);
+			}
+		}
+
+		for (size_t i = 3 * initial_views(1); i < 3 * initial_views(1) + 3; i++)
+		{
+			for (size_t j = 0; j < initial_points.size(); j++)
+			{
+				scaled_meas(i % 3+3, j) = norm_meas.coeff(i, initial_points[j]) * proj_depths(1,j);
+			}
+		}
+
+
+		Eigen::BDCSVD<MatrixDynamicDense<MatrixType>> svdScaled(scaled_meas, Eigen::ComputeFullU|Eigen::ComputeFullV);
+
+		//create diagonal matrix with first 4 singular values
+		Eigen::Matrix<MatrixType, 4, 4> singularDiag = Eigen::Matrix<MatrixType, 4, 1>
+		(sqrt(svdScaled.singularValues()(0)), sqrt(svdScaled.singularValues()(1)), sqrt(svdScaled.singularValues()(2)), sqrt(svdScaled.singularValues()(3))).asDiagonal();
+
+		//last two cols flipped signs
+		MatrixDynamicDense<MatrixType> cameras = svdScaled.matrixU().block(0, 0, svdScaled.matrixU().rows(), 4) * singularDiag;
+		cameras.col(2) *= -1;
+		cameras.col(3) *= -1;
+
+		MatrixDynamicDense<MatrixType> points = singularDiag * svdScaled.matrixV().block(0, 0, svdScaled.matrixV().rows(), 4).transpose();
+
+		//points has the last 2 rows flipped due to transposition ( as opposed to cols)
+		cameras.row(2) *= -1;
+		cameras.row(3) *= -1;
+
+		return { cameras,points,fixed,pathway };
+	}
+
 
 	/*
 	Find and solve an initial stereo subproblem to start the reconstruction.
@@ -1162,7 +1314,8 @@ namespace P2SFM
 		* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points (1 x 2 + K)
 	*/
 	template <typename MatrixType, typename IndexType>
-	void Initialisation(
+	std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>, MatrixDynamicDense<int>, Vector<int> >
+		Initialisation(
 		const MatrixColSparse<MatrixType, IndexType>& norm_meas,
 		const MatrixDynamicDense<bool>& visibility, 
 		const std::vector<int>& affinity, 
@@ -1172,9 +1325,14 @@ namespace P2SFM
 	{
 		MatrixColSparse<MatrixType, IndexType> transposedMat(norm_meas.transpose());
 
+		//variables for retun value compute_cam_pts
+		MatrixDynamicDense< MatrixType> cameras, points;
+		MatrixDynamicDense< int> fixed;
+		Vector<int> pathway;
+
 		//match row in estimated_views and view_pairs
 		//find matches 
-		for (size_t i = 0; i < view_pairs.rows(); i++)
+		//for (size_t i = 0; i < view_pairs.rows(); i++)
 		{
 			int firstViewRow = view_pairs(i, 0);
 			int secondViewRow = view_pairs(i, 1);
@@ -1183,7 +1341,49 @@ namespace P2SFM
 			MatrixDynamicDense<MatrixType> firstViewDense, secondViewDense;
 			std::tie(firstViewDense,secondViewDense) = EigenHelpers::GetViewsCommonPoints(transposedMat, visibility, 3 * firstViewRow, 3 * secondViewRow);
 
-			EstimateFundamentalMat(firstViewDense,secondViewDense,EigenHelpers::ESTIMATION_METHOD::RANSAC, 99.99, 1000, 1e-3);
+			VectorVertical<MatrixType> inliers;
+			MatrixDynamicDense<MatrixType> fundMat;
+
+			//no easy way to quit out of EstimFundMat when already in -> condition here
+			if (firstViewDense.rows() == 2
+				&& firstViewDense.cols() >= 10
+				&& (firstViewDense.rows() == secondViewDense.rows() || firstViewDense.cols() == secondViewDense.cols()))
+			{
+				std::tie(fundMat,inliers) = EstimateFundamentalMat(firstViewDense, secondViewDense, EigenHelpers::ESTIMATION_METHOD::RANSAC, 99.99, 1000, 1e-3);
+
+				//get inliers of visible points
+
+				//std::cout << "FUNDMAT: " << std::endl << fundMat << std::endl;
+				//std::cout << "INLIERS: " << std::endl << inliers << std::endl;
+
+				auto visiblePoints = visibility.row(firstViewRow) && visibility.row(secondViewRow);
+				//std::cout << "VISIBLE POINTS: " << std::endl << visiblePoints << std::endl;
+
+				//get the id of all rows that are both in visible points that are also present in inliers inliers
+				
+				Vector<int> init_points((inliers.array() !=0 ).count());
+				//std::vector<int> init_points(inliers.rows());
+				int count = 0, newId = 0;
+				for (size_t j = 0; j < visiblePoints.cols(); j++)
+				{
+					if (visiblePoints(j) == 1)
+					{					
+						if (inliers(count) != (MatrixType)0)
+						{
+							init_points.coeffRef(newId) = j;
+							newId++;
+						}
+						count++;
+					}
+				}
+			
+				std::tie(cameras, points, fixed, pathway) = ComputeCamPts(norm_meas, init_points, fundMat, Eigen::Vector2i(firstViewRow, secondViewRow));
+			}
 		}
-	}
+		
+		std::cout << "CAMERAS: " << std::endl << cameras;
+		//return cameras, points, pathway and fixed
+		return {cameras,points,fixed,pathway }
+
+=	}
 }
