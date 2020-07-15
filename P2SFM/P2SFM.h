@@ -334,7 +334,6 @@ namespace P2SFM
 			//if (coeffs.rows() <= coeffs.cols())
 			//{
 			//	//m <= n — svd(A,0) is equivalent to svd(A) MATLAB
-			//	std::cout << "CLWONS";
 			//	auto lastCol = svd.matrixV().col(svd.matrixV().cols() - 1);
 			//	fundamental_matrix << lastCol(0), lastCol(3), lastCol(6),
 			//		lastCol(1), lastCol(4), lastCol(7),
@@ -426,15 +425,12 @@ namespace P2SFM
 
 
 				auto estimation = Estimate(subMat, false);
+
 				//estimation to col vector order [0 3 6 1 4 7 2 5 8]
 				VectorVertical<MatrixType> estimateVec(9);
 				estimateVec << estimation(0, 0), estimation(1, 0), estimation(2, 0),
 					estimation(0, 1), estimation(1, 1), estimation(2, 1),
 					estimation(0, 2), estimation(1, 2), estimation(2, 2);
-
-				//std::cout << std::endl << "estimate: " << estimateVec << std::endl;
-				//std::cout << std::endl << "submat: " << std::endl << subMat << std::endl;
-				//std::cout << std::endl << "distance match: " << std::endl << (subMat * estimateVec).norm() / sqrt(8) << std::endl;
 
 				if ((subMat * estimateVec).norm() / sqrt(8) < distance_threshold)	//THIS MIGHT NOT BE CORRECT YET
 				{
@@ -498,9 +494,20 @@ namespace P2SFM
 			}
 
 
+			//best inliers has at least options.min_common_init amount of projection correspondences
+
 			return { best_inliers ,best_estim };
 		}
 
+
+		/*
+		Compute Vectorization of fundamental matrix (a' * F * b = 0)
+		Input: 
+			*a: a single projection
+			*b: a single projection
+		Output:
+			* vectorization of Fundamental Matrix  
+		*/
 		template <typename VectorType>
 		Vector<VectorType> LinVec( const Vector<VectorType>& a, const Vector<VectorType>& b)
 		{
@@ -838,7 +845,7 @@ namespace P2SFM
 
 	/*
 	Input:
-		*measEntry : single homogeneous coordinate
+		* measEntry : single homogeneous coordinate
 	Output:
 		*
 		*
@@ -859,7 +866,7 @@ namespace P2SFM
 
 	/*
 	Input:
-		*measEntry : single homogeneous coordinate
+		* measEntry : single homogeneous coordinate
 	Output:
 		*
 		*
@@ -1117,13 +1124,14 @@ namespace P2SFM
 		* inliers, a binary or index vector indicating the projections used in the estimation
 	*/
 	template <typename MatrixType>
-	std::tuple< MatrixDynamicDense<MatrixType>, VectorVertical<MatrixType>>
+	std::tuple< MatrixDynamicDense<MatrixType>, VectorVertical<MatrixType>, bool>
 		EstimateFundamentalMat(const MatrixDynamicDense<MatrixType>& projs1,
 		const MatrixDynamicDense<MatrixType> projs2,
 		const EigenHelpers::ESTIMATION_METHOD method = EigenHelpers::ESTIMATION_METHOD::DEFAULT,
 		const double confidence = 99.0,
 		const int max_iterations = 1000,
-		const double distance_threshold = 1e-5)
+		const double distance_threshold = 1e-5,
+		const Options& options = Options())
 	{
 		//make sure projs are of the correct, corresponding formats
 		//break here somehow
@@ -1136,25 +1144,24 @@ namespace P2SFM
 		if (projs1.rows() != 2)
 		{
 			std::cout << std::endl << "EstimateFundamentalMat: incorrect size for PROJS1 ROWS" << std::endl;
-			return { fundMat,inliers };
+			return { fundMat,inliers,false };
 
 		}
-		else if(projs1.cols() < 10)
+		else if(projs1.cols() < 8)
 		{
 			std::cout << std::endl << "EstimateFundamentalMat: PROJECTIONS NEED AT LEAST 8 COLUMNS" << std::endl;
-			return { fundMat, inliers };
+			return { fundMat, inliers,false };
 
 		}
 		else if (projs1.rows() != projs2.rows() || projs1.cols() != projs2.cols())
 		{
 			std::cout << std::endl << "EstimateFundamentalMat: The projections matrices must have the same size (2xN)" << std::endl;
-			return { fundMat,inliers };
+			return { fundMat,inliers,false };
 
 		}
 
 
 		MatrixDynamicDense<MatrixType> coeffs(projs1.cols(),9);
-		//create array 'coeffs'
 		for (size_t i = 0; i < projs1.cols(); i++)
 		{
 			coeffs.row(i) = AlgebraHelpers::LinVec((Vector<MatrixType>)projs2.col(i), (Vector<MatrixType>)projs1.col(i));
@@ -1166,16 +1173,27 @@ namespace P2SFM
 		{
 			MatrixDynamicDense<MatrixType> fundamentalMat(3, 3);
 			std::tie(inliers, fundamentalMat) = AlgebraHelpers::RansacEstimate(coeffs, confidence, max_iterations, distance_threshold);
+
+
+			//do we have enough inliers (options.min_common_init)
+			if (inliers.rows() < options.min_common_init)
+			{
+				std::cout << std::endl << "EstimateFundamentalMat: not enough inliers found" << std::endl;
+				return { fundMat,inliers,false };
+			}
+
 			Eigen::JacobiSVD<MatrixDynamicDense<MatrixType>> svd(fundamentalMat, Eigen::ComputeFullU | Eigen::ComputeFullV);
 
 			MatrixDynamicDense<MatrixType> singularMat(2, 2);	//plug singular values in matrix for use in calculations
 			singularMat << svd.singularValues()[0], 0,
 				0, svd.singularValues()[1];
-			MatrixDynamicDense<MatrixType> matV = svd.matrixV().block(0,0,3,2);
 
+			MatrixDynamicDense<MatrixType> matV = svd.matrixV().block(0,0,3,2);
 			matV.transposeInPlace();
 			
-			fundMat = svd.matrixU().block(0, 0, 3, 2) * singularMat * 	matV;
+			fundMat = svd.matrixU().block(0, 0, 3, 2) * singularMat * 	matV; //should be rank 2
+			//2 first values singular values should be a lot higher than 3rd value -> if not return false
+			//TODO: IMPLEMENT RANK CHECK IF SINGULAR 
 
 			break; 
 		}
@@ -1191,10 +1209,21 @@ namespace P2SFM
 
 		// We estimated F_21 instead of F_12 -> transpose
 		fundMat.transposeInPlace();
-		return {  fundMat,inliers };
+		return {  fundMat,inliers,true };
 	}
 
 	//TODO: ADD A MORE DETAILED DESCRIPTION
+	/*
+	Retrieve projective Camera position (one of two, with the other being considered an identity) and projective Points positions from fundamental matrix
+	Input:
+		*
+		*
+	Output:
+		* cameras : Projective estimation of the initial cameras (6x4)
+		* points : Projective estimation of the initial points (4xK)
+		* pathway : Array containing the order in which views(negative) and points(positive) has been added (1 x 2 + K)
+		* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points (1 x 2 + K)
+	*/
 	template <typename MatrixType, typename IndexType>
 	std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>, MatrixDynamicDense<int>, Vector<int> >
 	ComputeCamPts(
@@ -1233,8 +1262,6 @@ namespace P2SFM
 			proj_depths.col(i) = proj_depths.col(i) / (proj_depths.coeff(0, i) + proj_depths.coeff(1, i)) * 2;
 		}
 
-
-		//WHAT IS THIS VAR?
 		Vector<int> pathway(initial_points.size() + 2);
 		// intial views are added to initial points between element 0-1 and 1-2
 		pathway << initial_points(0), -initial_views(0), initial_points(1), -initial_views(1), initial_points.block(0, 2, 1, initial_points.cols() - 2);//rest of initial_points
@@ -1290,8 +1317,8 @@ namespace P2SFM
 		MatrixDynamicDense<MatrixType> points = singularDiag * svdScaled.matrixV().block(0, 0, svdScaled.matrixV().rows(), 4).transpose();
 
 		//points has the last 2 rows flipped due to transposition ( as opposed to cols)
-		cameras.row(2) *= -1;
-		cameras.row(3) *= -1;
+		points.row(2) *= -1;
+		points.row(3) *= -1;
 
 		return { cameras,points,fixed,pathway };
 	}
@@ -1308,13 +1335,16 @@ namespace P2SFM
 		* estimated_views : Views that have already been estimated (Kx2)
 		* options : Structure containing options, can be left blank to initialise with default values
 	Output :
-		* cameras : Projective estimation of the initial cameras (6x4)
-		* points : Projective estimation of the initial points (4xK)
-		* pathway : Array containing the order in which views(negative) and points(positive) has been added (1 x 2 + K)
-		* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points (1 x 2 + K)
+		* tuple containing:
+			* cameras : Projective estimation of the initial cameras (6x4)
+			* points : Projective estimation of the initial points (4xK)
+			* pathway : Array containing the order in which views(negative) and points(positive) has been added (1 x 2 + K)
+			* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points (1 x 2 + K)
+		* succes: whether or not valid results could be returned 
 	*/
 	template <typename MatrixType, typename IndexType>
-	std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>, MatrixDynamicDense<int>, Vector<int> >
+	//std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>, MatrixDynamicDense<int>, Vector<int>, bool>
+	std::tuple<std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>, MatrixDynamicDense<int>, Vector<int> >, bool>
 		Initialisation(
 		const MatrixColSparse<MatrixType, IndexType>& norm_meas,
 		const MatrixDynamicDense<bool>& visibility, 
@@ -1330,9 +1360,19 @@ namespace P2SFM
 		MatrixDynamicDense< int> fixed;
 		Vector<int> pathway;
 
+		//find matches in view_pairs and estimated_views
+
+		//TO-DO: IMPLEMENT FIND MATCHES
+		//estimated_pairs = ismember(view_pairs, estimated_views);    %find matching rows
+		
+		//both_unestimated = all(~estimated_pairs, 2);        %both row values are 0 / 1
+		//one_estimated = any(estimated_pairs, 2) & ~all(estimated_pairs, 2);
+		//sorted_idx = horzcat(find(both_unestimated)', find(one_estimated)');
+
+
 		//match row in estimated_views and view_pairs
 		//find matches 
-		//for (size_t i = 0; i < view_pairs.rows(); i++)
+		for (size_t i = 0; i < view_pairs.rows(); i++)
 		{
 			int firstViewRow = view_pairs(i, 0);
 			int secondViewRow = view_pairs(i, 1);
@@ -1344,46 +1384,201 @@ namespace P2SFM
 			VectorVertical<MatrixType> inliers;
 			MatrixDynamicDense<MatrixType> fundMat;
 
-			//no easy way to quit out of EstimFundMat when already in -> condition here
+			//no easy way to quit out of EstimFundMat when already in -> condition here??
 			if (firstViewDense.rows() == 2
-				&& firstViewDense.cols() >= 10
+				&& firstViewDense.cols() >= 8
 				&& (firstViewDense.rows() == secondViewDense.rows() || firstViewDense.cols() == secondViewDense.cols()))
 			{
-				std::tie(fundMat,inliers) = EstimateFundamentalMat(firstViewDense, secondViewDense, EigenHelpers::ESTIMATION_METHOD::RANSAC, 99.99, 1000, 1e-3);
+				bool succesfulEstimation;
+				std::tie(fundMat,inliers, succesfulEstimation) = 
+					EstimateFundamentalMat(firstViewDense, secondViewDense, EigenHelpers::ESTIMATION_METHOD::RANSAC, 99.99, 1000, 1e-3,options);
 
-				//get inliers of visible points
-
-				//std::cout << "FUNDMAT: " << std::endl << fundMat << std::endl;
-				//std::cout << "INLIERS: " << std::endl << inliers << std::endl;
-
-				auto visiblePoints = visibility.row(firstViewRow) && visibility.row(secondViewRow);
-				//std::cout << "VISIBLE POINTS: " << std::endl << visiblePoints << std::endl;
-
-				//get the id of all rows that are both in visible points that are also present in inliers inliers
-				
-				Vector<int> init_points((inliers.array() !=0 ).count());
-				//std::vector<int> init_points(inliers.rows());
-				int count = 0, newId = 0;
-				for (size_t j = 0; j < visiblePoints.cols(); j++)
+				//estimate fund mat can fail, if so continue to next iteration loop
+				//only need to be succesfull once?
+				if (succesfulEstimation)
 				{
-					if (visiblePoints(j) == 1)
-					{					
-						if (inliers(count) != (MatrixType)0)
+					//get inliers of visible points
+					auto visiblePoints = visibility.row(firstViewRow) && visibility.row(secondViewRow);
+
+					//get the id of all rows that are both in visible points that are also present in inliers inliers
+					Vector<int> init_points((inliers.array() != 0).count());
+
+					int count = 0, newId = 0;
+					for (size_t j = 0; j < visiblePoints.cols(); j++)
+					{
+						if (visiblePoints(j) == 1)
 						{
-							init_points.coeffRef(newId) = j;
-							newId++;
+							if (inliers(count) != (MatrixType)0)
+							{
+								init_points.coeffRef(newId) = j;
+								newId++;
+							}
+							count++;
 						}
-						count++;
 					}
+
+					//std::tie(cameras, points, fixed, pathway) = ComputeCamPts(norm_meas, init_points, fundMat, Eigen::Vector2i(firstViewRow, secondViewRow));
+					//return {  cameras,points,fixed, pathway , true };
+					return { ComputeCamPts(norm_meas, init_points, fundMat, Eigen::Vector2i(firstViewRow, secondViewRow)) , true };
 				}
-			
-				std::tie(cameras, points, fixed, pathway) = ComputeCamPts(norm_meas, init_points, fundMat, Eigen::Vector2i(firstViewRow, secondViewRow));
 			}
 		}
 		
-		std::cout << "CAMERAS: " << std::endl << cameras;
-		//return cameras, points, pathway and fixed
-		return {cameras,points,fixed,pathway }
+		std::cout << "views did not meet minimum requirements, no good computeCamPts found!, returning empty variables" << std::endl;
 
-=	}
+		//if reached here, should be empty all outputs are empty -> return false
+		return { {cameras,points,fixed,pathway},false };
+
+	}
+
+	template <typename MatrixType, typename IndexType>
+	bool CheckExpandInit(
+		std::tuple<MatrixDynamicDense<MatrixType> /*cameras*/, MatrixDynamicDense<MatrixType> /*points*/, MatrixDynamicDense<int> /*fixed*/, 
+		Vector<int> /*pathway*/>& cam_point_locations,
+		MatrixColSparse<MatrixType, IndexType>& inliers,
+		const int num_views,
+		const int num_points)
+	{
+		//assert(isrow(pathway), 'Initial pathway should be a row');	//inherant to vector<int> format
+		//assert(iscell(fixed) && isrow(fixed), 'Initial fixed constraints should be a row of cells');
+		//assert(length(pathway) == length(fixed), 'Initial pathway and fixed constraints should have the same lengths');
+
+		if (std::get<3>(cam_point_locations).size() != std::get<2>(cam_point_locations).cols())
+		{
+			std::cout << "Initial pathway and fixed constraints should have the same lengths" << std::endl;
+			return false;
+		}
+
+
+		const int last_path = std::get<3>(cam_point_locations).cols();
+
+		//find cleaner way??
+		//append empty points to pathway
+		Vector<int> fillerPath(num_views + num_points - last_path);
+		fillerPath.setZero();
+
+		Vector<int> newPath(num_views + num_points);
+		newPath << std::get<3>(cam_point_locations), fillerPath;
+
+		if (std::get<0>(cam_point_locations).rows() != 3 * num_views)
+		{
+			MatrixDynamicDense<MatrixType> newCameras(3*num_views,4);
+			newCameras.setZero();
+
+			//pathway(1) is element -initial_views(0) back in EstimateFunMat()
+			for (size_t i = 0 ; i < 3; i++)
+			{
+				newCameras.row((-3 * std::get<3>(cam_point_locations)(1)) +i + 1) = std::get<0>(cam_point_locations).row(i);
+			}
+
+			//pathway(3) is element -initial_views(0) back in EstimateFunMat()
+			for (size_t i = 0; i < 3; i++)
+			{
+				newCameras.row((-3 * std::get<3>(cam_point_locations)(3)) + i + 1) = std::get<0>(cam_point_locations).row(i  +3);
+			}
+
+		}
+
+		if (std::get<1>(cam_point_locations).cols() != num_points)
+		{
+			MatrixDynamicDense<MatrixType> newPoints(4, num_points);	//should this be a sparse matrix?
+			newPoints.setZero();
+
+			int count = 0;
+			for (size_t i = 0; i < std::get<3>(cam_point_locations).size(); i++)
+			{
+				//do not consider the 2 initial_views values
+				if (std::get<3>(cam_point_locations)(i) > 0)
+				{
+					newPoints.col(std::get<3>(cam_point_locations)(i)) = std::get<1>(cam_point_locations).col(count);	//issue here
+					count++;
+
+				}
+			}
+
+		}
+
+		//2 negative initial_views values + inliers needs to be empty still
+		//fill inliers sparse matrix with values
+		if (inliers.nonZeros() == 0 && (std::get<3>(cam_point_locations).array() < 0).count() == 2)
+		{
+			std::cout << "WE HAVE MDAE IT";
+			std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
+
+			const int firstRow = -std::get<3>(cam_point_locations)(1);
+			const int secondRow = -std::get<3>(cam_point_locations)(3);
+
+
+			//set the two rows for initial_views values to 1 where the col value 
+			for (size_t i = 0; i < std::get<3>(cam_point_locations).size(); i++)
+			{
+				if (std::get<3>(cam_point_locations)(i) > 0)
+				{
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(firstRow, std::get<3>(cam_point_locations)(i), 1));
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(secondRow, std::get<3>(cam_point_locations)(i), 1));
+				}
+			}
+
+			inliers.setFromTriplets(tripletList.begin(), tripletList.end());
+
+		}
+
+		return true;
+	}
+
+
+	/*
+	   Complete the initial factorization provided in cameras and points under the constraint
+	   defined by the pathway and fixed entries.
+	   Use only the visible entries for which measurements are given as there pseudo inverse(pinv_meas) and a data matrix.
+	   Measurements have also been normalized and original measurements are given(for the robust estimation).
+	
+	 Input:
+		* data : Matrix containing the data to compute the cost function(2Fx3N)
+		* pinv_meas : Matrix containing the data for elimination of projective depths,
+		  cross - product matrix or pseudo - inverse of the of the normalized homogeneous coordinates(Fx3N)
+		* visibility : Visibility matrix binary mask(FxN)
+		
+		* normalisations : Normalisation transformation for each camera stacked vertically(3Fx3)
+		* img_meas : Unnormaliazed measurements of the projections, used for computing errors and scores(3FxN)
+		* img_sizes : Size of the images, used to compute the pyramidal visibility scores(2xF)
+		* centers : Principal points coordinates for each camera(2xF)
+		* cam_point_locations: tuple containing the full return value from P2SFM::Initialisation():
+			* cameras : Initial cameras estimation(3Fx4 or 3kx4 if k cameras in the initial sub - problem)
+			* points : Initial points estimation(4xN or 4xk if k points in the initial sub - problem)
+			* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points(1 x F + N)
+			* pathway : Array containing the order in which views(negative) and points(positive) has been added(1 x k, k <= F + N)
+		* options : Structure containing options(must be initialized by ppsfm_options to contains all necessary fields)
+	 Output :
+		* cameras : Projective estimation of the cameras that has been completed(3Fx4)
+		* points : Projective estimation of the points that has been completed(4xN)
+		* pathway : Array containing the order in which views(negative) and points(positive) has been added(1 x k, k <= F + N)
+		* fixed : Cell containing arrays of the points or views used in the constraints when adding views and points(1 x F + N)
+		* inliers : Inliers matrix binary mask(FxN)
+	*/
+	template <typename MatrixType, typename IndexType>
+	void Complete(
+		const MatrixColSparse<MatrixType, IndexType>& data, 
+		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
+		const MatrixDynamicDense<bool>& visibility,
+		const MatrixColSparse<MatrixType, IndexType>& normalisations,
+		const MatrixColSparse<MatrixType, IndexType>& img_meas,
+		const MatrixDynamicDense<MatrixType>& img_sizes,
+		const MatrixDynamicDense<MatrixType>& centers,
+		std::tuple<MatrixDynamicDense<MatrixType> /*cameras*/, MatrixDynamicDense<MatrixType> /*points*/, 
+		MatrixDynamicDense<int> /*fixed*/, Vector<int> /*pathway*/>& cam_point_locations,
+		const Options& options = Options()
+		)
+	{
+		const int num_views = visibility.rows();
+		const int num_points = visibility.cols();
+
+		MatrixColSparse<MatrixType, IndexType> inliers(num_views, num_points);
+		inliers.reserve((visibility.array() >0).count());
+
+		CheckExpandInit(cam_point_locations,inliers, num_views,num_points);
+
+	}
+
+
 }
