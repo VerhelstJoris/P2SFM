@@ -1212,6 +1212,19 @@ namespace P2SFM
 		return {  fundMat,inliers,true };
 	}
 
+
+
+
+	template <typename MatrixType>
+	struct InitialSolveOutput
+	{
+		MatrixDynamicDense<MatrixType> cameras;
+		MatrixDynamicDense<MatrixType> points;
+		MatrixDynamicDense<int> fixed;
+		Vector<int> pathway;
+	};
+
+
 	//TODO: ADD A MORE DETAILED DESCRIPTION
 	/*
 	Retrieve projective Camera position (one of two, with the other being considered an identity) and projective Points positions from fundamental matrix
@@ -1225,8 +1238,7 @@ namespace P2SFM
 		* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points (1 x 2 + K)
 	*/
 	template <typename MatrixType, typename IndexType>
-	std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>, MatrixDynamicDense<int>, Vector<int> >
-	ComputeCamPts(
+	InitialSolveOutput<MatrixType> ComputeCamPts(
 		const MatrixColSparse<MatrixType, IndexType>& norm_meas,
 		const Vector<int>& initial_points,
 		const MatrixDynamicDense<MatrixType>& fundamental_mat,
@@ -1343,8 +1355,7 @@ namespace P2SFM
 		* succes: whether or not valid results could be returned 
 	*/
 	template <typename MatrixType, typename IndexType>
-	//std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>, MatrixDynamicDense<int>, Vector<int>, bool>
-	std::tuple<std::tuple<MatrixDynamicDense<MatrixType>, MatrixDynamicDense<MatrixType>, MatrixDynamicDense<int>, Vector<int> >, bool>
+	std::tuple<InitialSolveOutput<MatrixType>, bool>
 		Initialisation(
 		const MatrixColSparse<MatrixType, IndexType>& norm_meas,
 		const MatrixDynamicDense<bool>& visibility, 
@@ -1433,8 +1444,7 @@ namespace P2SFM
 
 	template <typename MatrixType, typename IndexType>
 	bool CheckExpandInit(
-		std::tuple<MatrixDynamicDense<MatrixType> /*cameras*/, MatrixDynamicDense<MatrixType> /*points*/, MatrixDynamicDense<int> /*fixed*/, 
-		Vector<int> /*pathway*/>& cam_point_locations,
+		InitialSolveOutput<MatrixType>& cam_point_locations,
 		MatrixColSparse<MatrixType, IndexType>& inliers,
 		const int num_views,
 		const int num_points)
@@ -1443,14 +1453,14 @@ namespace P2SFM
 		//assert(iscell(fixed) && isrow(fixed), 'Initial fixed constraints should be a row of cells');
 		//assert(length(pathway) == length(fixed), 'Initial pathway and fixed constraints should have the same lengths');
 
-		if (std::get<3>(cam_point_locations).size() != std::get<2>(cam_point_locations).cols())
+		if (cam_point_locations.pathway.size() != cam_point_locations.fixed.cols())
 		{
 			std::cout << "Initial pathway and fixed constraints should have the same lengths" << std::endl;
 			return false;
 		}
 
 
-		const int last_path = std::get<3>(cam_point_locations).cols();
+		const int last_path = cam_point_locations.pathway.cols();
 
 		//find cleaner way??
 		//append empty points to pathway
@@ -1458,9 +1468,9 @@ namespace P2SFM
 		fillerPath.setZero();
 
 		Vector<int> newPath(num_views + num_points);
-		newPath << std::get<3>(cam_point_locations), fillerPath;
+		newPath << cam_point_locations.pathway, fillerPath;
 
-		if (std::get<0>(cam_point_locations).rows() != 3 * num_views)
+		if (cam_point_locations.cameras.rows() != 3 * num_views)
 		{
 			MatrixDynamicDense<MatrixType> newCameras(3*num_views,4);
 			newCameras.setZero();
@@ -1468,29 +1478,29 @@ namespace P2SFM
 			//pathway(1) is element -initial_views(0) back in EstimateFunMat()
 			for (size_t i = 0 ; i < 3; i++)
 			{
-				newCameras.row((-3 * std::get<3>(cam_point_locations)(1)) +i + 1) = std::get<0>(cam_point_locations).row(i);
+				newCameras.row((-3 * cam_point_locations.pathway(1)) +i + 1) = cam_point_locations.cameras.row(i);
 			}
 
 			//pathway(3) is element -initial_views(0) back in EstimateFunMat()
 			for (size_t i = 0; i < 3; i++)
 			{
-				newCameras.row((-3 * std::get<3>(cam_point_locations)(3)) + i + 1) = std::get<0>(cam_point_locations).row(i  +3);
+				newCameras.row((-3 * cam_point_locations.pathway(3)) + i + 1) = cam_point_locations.cameras.row(i  +3);
 			}
 
 		}
 
-		if (std::get<1>(cam_point_locations).cols() != num_points)
+		if (cam_point_locations.points.cols() != num_points)
 		{
 			MatrixDynamicDense<MatrixType> newPoints(4, num_points);	//should this be a sparse matrix?
 			newPoints.setZero();
 
 			int count = 0;
-			for (size_t i = 0; i < std::get<3>(cam_point_locations).size(); i++)
+			for (size_t i = 0; i < cam_point_locations.pathway.size(); i++)
 			{
 				//do not consider the 2 initial_views values
-				if (std::get<3>(cam_point_locations)(i) > 0)
+				if (cam_point_locations.pathway(i) > 0)
 				{
-					newPoints.col(std::get<3>(cam_point_locations)(i)) = std::get<1>(cam_point_locations).col(count);	//issue here
+					newPoints.col(cam_point_locations.pathway(i)) = cam_point_locations.points.col(count);	//issue here
 					count++;
 
 				}
@@ -1500,22 +1510,22 @@ namespace P2SFM
 
 		//2 negative initial_views values + inliers needs to be empty still
 		//fill inliers sparse matrix with values
-		if (inliers.nonZeros() == 0 && (std::get<3>(cam_point_locations).array() < 0).count() == 2)
+		if (inliers.nonZeros() == 0 && (cam_point_locations.pathway.array() < 0).count() == 2)
 		{
 			std::cout << "WE HAVE MDAE IT";
 			std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
 
-			const int firstRow = -std::get<3>(cam_point_locations)(1);
-			const int secondRow = -std::get<3>(cam_point_locations)(3);
+			const int firstRow = -cam_point_locations.pathway(1);
+			const int secondRow = -cam_point_locations.pathway(3);
 
 
 			//set the two rows for initial_views values to 1 where the col value 
-			for (size_t i = 0; i < std::get<3>(cam_point_locations).size(); i++)
+			for (size_t i = 0; i < cam_point_locations.pathway.size(); i++)
 			{
-				if (std::get<3>(cam_point_locations)(i) > 0)
+				if (cam_point_locations.pathway(i) > 0)
 				{
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(firstRow, std::get<3>(cam_point_locations)(i), 1));
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(secondRow, std::get<3>(cam_point_locations)(i), 1));
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(firstRow, cam_point_locations.pathway(i), 1));
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(secondRow, cam_point_locations.pathway(i), 1));
 				}
 			}
 
@@ -1525,7 +1535,6 @@ namespace P2SFM
 
 		return true;
 	}
-
 
 	/*
 	   Complete the initial factorization provided in cameras and points under the constraint
@@ -1558,15 +1567,14 @@ namespace P2SFM
 	*/
 	template <typename MatrixType, typename IndexType>
 	void Complete(
-		const MatrixColSparse<MatrixType, IndexType>& data, 
+		const MatrixColSparse<MatrixType, IndexType>& data,
 		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
 		const MatrixDynamicDense<bool>& visibility,
 		const MatrixColSparse<MatrixType, IndexType>& normalisations,
 		const MatrixColSparse<MatrixType, IndexType>& img_meas,
 		const MatrixDynamicDense<MatrixType>& img_sizes,
 		const MatrixDynamicDense<MatrixType>& centers,
-		std::tuple<MatrixDynamicDense<MatrixType> /*cameras*/, MatrixDynamicDense<MatrixType> /*points*/, 
-		MatrixDynamicDense<int> /*fixed*/, Vector<int> /*pathway*/>& cam_point_locations,
+		InitialSolveOutput<MatrixType>& init_output,
 		const Options& options = Options()
 		)
 	{
@@ -1576,7 +1584,7 @@ namespace P2SFM
 		MatrixColSparse<MatrixType, IndexType> inliers(num_views, num_points);
 		inliers.reserve((visibility.array() >0).count());
 
-		CheckExpandInit(cam_point_locations,inliers, num_views,num_points);
+		CheckExpandInit(init_output,inliers, num_views,num_points);
 
 	}
 
