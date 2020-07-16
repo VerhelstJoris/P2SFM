@@ -7,11 +7,9 @@
 #include <algorithm>
 #include <numeric>
 
-//typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> MatrixDynamicDense;
 //dynamic sized dense matrix template 
 template <typename Type> using MatrixDynamicDense = Eigen::Matrix<Type, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>;
 
-//typedef Eigen::SparseMatrix<double, Eigen::ColMajor, int64_t> MatrixColSparse;
 //dynamic sized sparse matrix template
 template <typename ScalarType, typename IndexType> using MatrixColSparse = Eigen::SparseMatrix<ScalarType, Eigen::ColMajor, IndexType>;
 
@@ -20,6 +18,12 @@ template <typename Type> using Vector = Eigen::Matrix<Type,1, Eigen::Dynamic>;
 template <typename Type> using VectorVertical = Eigen::Matrix<Type, Eigen::Dynamic,1>;
 //array template
 template <typename Type> using Array = Eigen::Array<Type, 1, Eigen::Dynamic>;
+
+
+//TEST
+//TODO: REMOVE
+#include <chrono>
+typedef std::chrono::high_resolution_clock Clock;
 
 
 namespace P2SFM 
@@ -1459,17 +1463,6 @@ namespace P2SFM
 			return false;
 		}
 
-
-		const int last_path = cam_point_locations.pathway.cols();
-
-		//find cleaner way??
-		//append empty points to pathway
-		Vector<int> fillerPath(num_views + num_points - last_path);
-		fillerPath.setZero();
-
-		Vector<int> newPath(num_views + num_points);
-		newPath << cam_point_locations.pathway, fillerPath;
-
 		if (cam_point_locations.cameras.rows() != 3 * num_views)
 		{
 			MatrixDynamicDense<MatrixType> newCameras(3*num_views,4);
@@ -1487,12 +1480,16 @@ namespace P2SFM
 				newCameras.row((-3 * cam_point_locations.pathway(3)) + i + 1) = cam_point_locations.cameras.row(i  +3);
 			}
 
+			cam_point_locations.cameras.resize(3 * num_views, 4);	//can only resize afterwards to prevent being destructive
+			cam_point_locations.cameras = newCameras;
 		}
+
+
 
 		if (cam_point_locations.points.cols() != num_points)
 		{
-			MatrixDynamicDense<MatrixType> newPoints(4, num_points);	//should this be a sparse matrix?
-			newPoints.setZero();
+			MatrixDynamicDense<MatrixType> tempPoints(4, num_points);	//should this be a sparse matrix?
+			tempPoints.setZero();
 
 			int count = 0;
 			for (size_t i = 0; i < cam_point_locations.pathway.size(); i++)
@@ -1500,24 +1497,24 @@ namespace P2SFM
 				//do not consider the 2 initial_views values
 				if (cam_point_locations.pathway(i) > 0)
 				{
-					newPoints.col(cam_point_locations.pathway(i)) = cam_point_locations.points.col(count);	//issue here
+					tempPoints.col(cam_point_locations.pathway(i)) = cam_point_locations.points.col(count);	//issue here
 					count++;
-
 				}
 			}
 
+			cam_point_locations.points.resize(4, num_points);
+			cam_point_locations.points = tempPoints;
 		}
+
 
 		//2 negative initial_views values + inliers needs to be empty still
 		//fill inliers sparse matrix with values
 		if (inliers.nonZeros() == 0 && (cam_point_locations.pathway.array() < 0).count() == 2)
 		{
-			std::cout << "WE HAVE MDAE IT";
 			std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
 
 			const int firstRow = -cam_point_locations.pathway(1);
 			const int secondRow = -cam_point_locations.pathway(3);
-
 
 			//set the two rows for initial_views values to 1 where the col value 
 			for (size_t i = 0; i < cam_point_locations.pathway.size(); i++)
@@ -1530,8 +1527,19 @@ namespace P2SFM
 			}
 
 			inliers.setFromTriplets(tripletList.begin(), tripletList.end());
+		}		
 
-		}
+
+		const int last_path = cam_point_locations.pathway.cols();
+
+		//conservativeresize() seems to give better performance here, 
+		//seeing as we just append points to the end and do not change locations of existing points
+		cam_point_locations.pathway.conservativeResize(num_views + num_points);
+		cam_point_locations.pathway.block(0, last_path, 1, num_views + num_points - last_path).setZero();
+
+		//resize fixed in a similar manner
+		cam_point_locations.fixed.conservativeResize(2,num_views+num_points);
+		cam_point_locations.fixed.block(0, last_path, 2, num_views + num_points - last_path).setZero();
 
 		return true;
 	}
@@ -1552,7 +1560,7 @@ namespace P2SFM
 		* img_meas : Unnormaliazed measurements of the projections, used for computing errors and scores(3FxN)
 		* img_sizes : Size of the images, used to compute the pyramidal visibility scores(2xF)
 		* centers : Principal points coordinates for each camera(2xF)
-		* cam_point_locations: tuple containing the full return value from P2SFM::Initialisation():
+		* cam_point_locations: struct containing the struct return value from P2SFM::Initialisation():
 			* cameras : Initial cameras estimation(3Fx4 or 3kx4 if k cameras in the initial sub - problem)
 			* points : Initial points estimation(4xN or 4xk if k points in the initial sub - problem)
 			* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points(1 x F + N)
