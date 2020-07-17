@@ -1512,6 +1512,7 @@ namespace P2SFM
 		if (inliers.nonZeros() == 0 && (cam_point_locations.pathway.array() < 0).count() == 2)
 		{
 			std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
+			tripletList.reserve(cam_point_locations.pathway.size() * 2);
 
 			const int firstRow = -cam_point_locations.pathway(1);
 			const int secondRow = -cam_point_locations.pathway(3);
@@ -1589,11 +1590,106 @@ namespace P2SFM
 		const int num_views = visibility.rows();
 		const int num_points = visibility.cols();
 
+		//allocate space for a sparse amt
 		MatrixColSparse<MatrixType, IndexType> inliers(num_views, num_points);
 		inliers.reserve((visibility.array() >0).count());
 
 		CheckExpandInit(init_output,inliers, num_views,num_points);
 
+		//variables used to limit refinement to latest added views/points
+		int init_refine = 0;
+		int new_init_refine = 0;
+		Eigen::Vector2i prev_last_path = Eigen::Vector2i( 0,0 );
+		bool last_dir_change_view = 1; //Last direction change toward : 1 = views, 0 = points
+
+
+		//Number of projection last time each view/point has been rejected
+		Vector<int> rejected_views(num_views);
+		rejected_views.setZero();
+		Vector<int> rejected_points(num_points);
+		rejected_points.setZero();
+
+		//PVS for views
+		//old init_pvs function in ppsfm_complete
+		Vector<int> pvs_scores(num_views);
+		MatrixColSparse<MatrixType, IndexType> copyMat(img_meas.transpose());
+
+		MatrixColSparse<MatrixType, IndexType> projs(2,img_meas.cols());
+		std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
+		tripletList.reserve(img_meas.cols());	//estimation, should be far less than this
+
+		for (size_t i = 0; i < num_views; i++)
+		{
+			//projs = copyMat(k * 3 - 2:k * 3 - 1, pathway(visible(k, pathway)));
+
+			std::cout << "ITERATION: " << i << std::endl;
+			std::cout << init_output.pathway << std::endl;
+			std::cout << (init_output.pathway.array() > 0) << std::endl;//need the array not the 0/1 result
+
+			for (int k = i; k <i+2 ; ++k)
+			{
+
+				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(copyMat, k); it; ++it)
+				{
+					//std::cout << visibility(k, it.row()) << " "<<it.row()<< std::endl;
+
+					//if point is in both visible and pathway -> add
+					//std::cout << init_output.pathway(it.row()) << std::endl;
+					if (init_output.pathway(it.row()) > 0)
+					{
+						if (visibility(k, init_output.pathway(abs(it.row()-2))) == 1)
+						{
+							std::cout << "FOUND: " << it.row() <<  std::endl;
+						}
+					}
+				
+					//if (init_output.pathway(visibility(k, it.col())) )
+					{
+						//std::cout << "VALUE: " << it.value();
+					}
+				}
+				int x = 10;
+			}
+
+			projs.setFromTriplets(tripletList.begin(), tripletList.end());
+			tripletList.clear();
+
+			//if size(img_sizes, 2) == 1
+			//	pvs_scores{ view } = PyramidalVisibilityScore(img_sizes(1), img_sizes(2), level, projs);
+			//else
+			//	pvs_scores{ view } = PyramidalVisibilityScore(img_sizes(1, view), img_sizes(2, view), level, projs);
+			//end
+		}
+
+
+		//eligibility threshold levels
+		bool level_changed;
+		int level_views = std::max(options.init_level_views, options.max_level_views);
+		int level_points = std::max(options.init_level_points, options.max_level_points);
+
+		//get amount of values in pathway <0
+		int num_known_views = (init_output.pathway.array() < 0).count();
+		int num_known_points = (init_output.pathway.array() > 0).count();	//>0 to avoid empty values appended at the end
+		int num_added_views, num_added_points;
+
+		int num_iter = 0;
+		int iter_refine = 0;
+
+		//ppsfm_diagnosis()
+
+		//main loop 
+		//while ((num_known_points < num_points || num_known_views < num_views) && )
+		{
+			level_changed = false;
+			num_added_points = 0;
+			num_added_views = 0;
+
+			//process views
+			if (num_known_views < num_views)
+			{
+
+			}
+		}
 	}
 
 
