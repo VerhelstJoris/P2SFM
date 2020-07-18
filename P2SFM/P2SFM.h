@@ -1611,48 +1611,41 @@ namespace P2SFM
 
 		//PVS for views
 		//old init_pvs function in ppsfm_complete
-		Vector<int> pvs_scores(num_views);
+		std::vector<PyramidalVisibilityScore> pvs_scores(num_views);
 		MatrixColSparse<MatrixType, IndexType> copyMat(img_meas.transpose());
 
-		MatrixColSparse<MatrixType, IndexType> projs(2,img_meas.cols());
-		std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
-		tripletList.reserve(img_meas.cols());	//estimation, should be far less than this
+		//get all elements in pathway that are >0
+		Vector<int> copyPath((init_output.pathway.array() > 0).count());
+		copyPath << init_output.pathway(0), init_output.pathway(2), init_output.pathway.block(0, 4, 1, (init_output.pathway.array()>0).count() - 2);
+
+		//create matrix for projs, massively oversized (create afterwards without having to retrieve all elements twice??)
+		MatrixDynamicDense<MatrixType> projs(2, copyPath.size()); //max possible size
 
 		for (size_t i = 0; i < num_views; i++)
 		{
-			//projs = copyMat(k * 3 - 2:k * 3 - 1, pathway(visible(k, pathway)));
 
-			std::cout << "ITERATION: " << i << std::endl;
-			std::cout << init_output.pathway << std::endl;
-			std::cout << (init_output.pathway.array() > 0) << std::endl;//need the array not the 0/1 result
-
-			for (int k = i; k <i+2 ; ++k)
+			int counter=0;
+			for (size_t j = 0; j < copyPath.size(); j++)
 			{
-
-				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(copyMat, k); it; ++it)
+				if (visibility(i, copyPath(j)) == 1)
 				{
-					//std::cout << visibility(k, it.row()) << " "<<it.row()<< std::endl;
-
-					//if point is in both visible and pathway -> add
-					//std::cout << init_output.pathway(it.row()) << std::endl;
-					if (init_output.pathway(it.row()) > 0)
-					{
-						if (visibility(k, init_output.pathway(abs(it.row()-2))) == 1)
-						{
-							std::cout << "FOUND: " << it.row() <<  std::endl;
-						}
-					}
-				
-					//if (init_output.pathway(visibility(k, it.col())) )
-					{
-						//std::cout << "VALUE: " << it.value();
-					}
+					//std::cout << img_meas.coeff(3 * i, copyPath(j)) << std::endl;
+					//std::cout << img_meas.coeff(3 * i + 1, copyPath(j)) << std::endl;
+					projs(0, counter) = img_meas.coeff(3 * i, copyPath(j));
+					projs(1, counter) = img_meas.coeff(3 * i + 1, copyPath(j));
+					counter++;
 				}
-				int x = 10;
 			}
 
-			projs.setFromTriplets(tripletList.begin(), tripletList.end());
-			tripletList.clear();
+
+			if (img_sizes.cols()==1)
+			{
+				pvs_scores[i] = PyramidalVisibilityScore(img_sizes(0, 0), img_sizes(1, 0), options.score_level,projs.block(0, 0, 2, counter));
+			}
+			else
+			{
+				pvs_scores[i] = PyramidalVisibilityScore(img_sizes(0, i), img_sizes(1, i), options.score_level, projs.block(0, 0, 2, counter));
+			}
 
 			//if size(img_sizes, 2) == 1
 			//	pvs_scores{ view } = PyramidalVisibilityScore(img_sizes(1), img_sizes(2), level, projs);
