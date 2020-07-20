@@ -310,6 +310,22 @@ namespace P2SFM
 		}
 
 
+
+		template <typename MatrixType>
+		void RandPerm(std::vector<MatrixType>& vec, const MatrixType minVal, const MatrixType maxVal)
+		{
+			std::generate(vec.begin(), vec.end(), [&vec]()
+			{ 
+				MatrixType num;
+				do
+				{
+					num = rand() % (maxVal +minVal)+minVal;
+				} while (std::find(vec.begin(), vec.end(),num)!= vec.end());
+				
+				return num; 
+			});
+		}
+
 		//construct a matrix
 		//TO-DO:
 		//ADD A MORE INDEPTH DESCRIPTION
@@ -423,6 +439,7 @@ namespace P2SFM
 				//	return num; 
 				//});
 
+				//RandPerm(test_set,num_projs-1,0);
 				std::vector<int> test_set{ 12, 89, 93, 102, 124, 136, 106, 79 };	//TEST SET
 
 				//create 'submatrix' coeffs with only the test set rows
@@ -510,7 +527,6 @@ namespace P2SFM
 			return { best_inliers ,best_estim };
 		}
 
-
 		/*
 		Compute Vectorization of fundamental matrix (a' * F * b = 0)
 		Input: 
@@ -527,10 +543,42 @@ namespace P2SFM
 			return ret;
 		}
 
+		/* Find a random subset of given size ensuring that at least one of the value is from a given subset.
+			
+		Input:
+			* complete_set : The complete set from which the random subset is drawn ordered such that the last entries are the ones
+			               from which at least one value must be taken
+			* num_rejected : Position of the last value of the first subset
+			* num_sample : Size of the random subset
+		Output :
+			* test_set : Random subset*/
+		template <typename MatrixType>
+		Vector<MatrixType> RandomSubset(const Vector<MatrixType>& complete_set, const int num_rejected, const int num_sample)
+		{
+			//rand relies does int
+			//TODO: CHANGE RANDOMNESS??
+			if (num_rejected > 0)
+			{
+				//include at least one of the new data
+				int non_rejected = num_rejected + (rand() % complete_set.size() - num_rejected);
+				std::vector<MatrixType> temp_set(num_sample - 1, -1);
+				RandPerm(temp_set, non_rejected + 1, (int)complete_set.size() - 1);
+				Vector<MatrixType> test_set(temp_set.size() + 1);
+				test_set << EigenHelpers::StdVecToEigenVec(temp_set), non_rejected;
+
+				return test_set;
+			}
+			else
+			{
+				std::vector<MatrixType> test_set(num_sample, -1);
+				RandPerm(test_set,0, (int)complete_set.size());
+				return 	EigenHelpers::StdVecToEigenVec(test_set);
+			}
+		}
 	}
 
 	//A class to deal efficiently with the pyramidal visibility score from "Structure-from-Motion Revisisted", Schonberger & Frahm, CVPR16.
-	struct PyramidalVisibilityScore
+	class PyramidalVisibilityScore
 	{
 	public:
 
@@ -912,7 +960,8 @@ namespace P2SFM
       * normalisations: Normalisation transformation for each camera stacked vertically (3Fx3)
       */
 	template <typename MatrixType, typename IndexType>
-	void PrepareData(MatrixColSparse<MatrixType, IndexType>& measurements,
+	void PrepareData(
+		MatrixColSparse<MatrixType, IndexType>& measurements,
 		MatrixColSparse<MatrixType,  IndexType>& data,
 		MatrixColSparse<MatrixType,  IndexType>& pinv_meas,
 		MatrixColSparse<MatrixType,  IndexType>& norm_meas,
@@ -1044,7 +1093,8 @@ namespace P2SFM
 	*/
 	template <typename MatrixType, typename IndexType>
 	std::tuple<std::vector<int>, MatrixDynamicDense<int> > 
-		PairsAffinity(const MatrixColSparse<MatrixType, IndexType>& measurements,
+	PairsAffinity(
+		const MatrixColSparse<MatrixType, IndexType>& measurements,
 		const MatrixDynamicDense<bool>& visibility, 
 		const MatrixDynamicDense<int>& img_size,
 		const Options& options = Options())
@@ -1055,8 +1105,6 @@ namespace P2SFM
 		//const int numViews = visibility.rows();
 		const int num_pairs = (visibility.rows()*(visibility.rows() + 1) ) / 2;
 
-		//REPLACE WITH VECTOR<int>??
-		//Vector<int> affinity(num_pairs);
 		std::vector<int> affinity;
 		
 		affinity.resize(num_pairs, 2);
@@ -1140,7 +1188,8 @@ namespace P2SFM
 	*/
 	template <typename MatrixType>
 	std::tuple< MatrixDynamicDense<MatrixType>, VectorVertical<MatrixType>, bool>
-		EstimateFundamentalMat(const MatrixDynamicDense<MatrixType>& projs1,
+	EstimateFundamentalMat(
+		const MatrixDynamicDense<MatrixType>& projs1,
 		const MatrixDynamicDense<MatrixType> projs2,
 		const EigenHelpers::ESTIMATION_METHOD method = EigenHelpers::ESTIMATION_METHOD::DEFAULT,
 		const double confidence = 99.0,
@@ -1226,7 +1275,6 @@ namespace P2SFM
 		fundMat.transposeInPlace();
 		return {  fundMat,inliers,true };
 	}
-
 
 
 
@@ -1371,7 +1419,7 @@ namespace P2SFM
 	*/
 	template <typename MatrixType, typename IndexType>
 	std::tuple<InitialSolveOutput<MatrixType>, bool>
-		Initialisation(
+	Initialisation(
 		const MatrixColSparse<MatrixType, IndexType>& norm_meas,
 		const MatrixDynamicDense<bool>& visibility, 
 		const std::vector<int>& affinity, 
@@ -1583,17 +1631,64 @@ namespace P2SFM
 		const MatrixColSparse<MatrixType, IndexType>& img_meas,
 		const MatrixDynamicDense<MatrixType>& centers,
 		const Options& options = Options(),
-		const int fig_base = 0
-	)
+		const int fig_base = 0)
 	{
 
 	}
 
 
-		//TODO:
-		//BETTER DESCRIPTION
-		std::tuple<Vector<double> , Vector<int>>
-		SearchEligibleViews(
+	/*   
+	Robustly estimate a new view given an index of points that are visible into it.
+	
+	Input:
+		* data : Matrix containing the data to compute the cost function(2Fx3N)
+		* pinv_meas : Matrix containing the data for elimination of projective depths,
+		                 cross - product matrix or pseudo - inverse of the of the normalized homogeneous coordinates(Fx3N)
+		* points : Projective points estimation(3Fx4)
+		* known_points : Indexes of the currently estimated points ordered such that ones already tested are first
+		* new_view : Index of the view to estimate
+		* num_rejected : Number of points that have already been tested
+		* normalisations : Normalisation transformation for each camera stacked vertically(3Fx3)
+		* img_meas : Unnormaliazed measurements of the projections, used for computing errors(3FxN)
+		* level : Level index(allow changing the size of the random subset)
+		* options : Structure containing options(must be initialized by ppsfm_options to contains all necessary fields)
+	Output :
+	    * best_estim : Best projective estimation of the view if one has been found
+	    * best_inliers : Inliers set of the best estimation found*/
+	template <typename MatrixType, typename IndexType>
+	void EstimateViewRobust(
+		const MatrixColSparse<MatrixType, IndexType>& data,
+		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
+		const MatrixDynamicDense<MatrixType>& points,
+		const Vector<int>& known_points,
+		const int new_view,
+		const Vector<int>& rejected_views,
+		const MatrixColSparse<MatrixType, IndexType>& normalisations,
+		const MatrixColSparse<MatrixType, IndexType>& img_meas,
+		const int level,
+		const Options& options = Options())
+	{
+	
+		const int viewId = 3 * new_view;
+		const double log_conf = log(1 - options.confidence / 100);
+
+		int best_score = INT_MAX;
+
+
+		int max_iter = options.max_iter_robust[1];
+
+		//main loop
+		for (size_t i = 0; i < max_iter; i++)
+		{
+			auto test_set = AlgebraHelpers::RandomSubset(known_points, 0/*rejected_views*/, options.minimal_view[level]);
+
+		}
+	}
+
+	//TODO:
+	//BETTER DESCRIPTION
+	std::tuple<Vector<double> , Vector<int>>
+	SearchEligibleViews(
 		const Eigen::Vector2i& thresholds,
 		const MatrixDynamicDense<bool>& visibility,
 		const Vector<int>& known_points,
@@ -1683,6 +1778,61 @@ namespace P2SFM
 			eligibles_compressed.conservativeResize(count);
 			auto scoresVec = EigenHelpers::StdVecToEigenVec(scores);
 			return { scoresVec,eligibles.block(0,0,1,thresholds(1)) };
+		}
+	}
+
+	template <typename MatrixType, typename IndexType>
+	void TryAddingViews(
+		const MatrixColSparse<MatrixType, IndexType>& data,
+		const MatrixColSparse<MatrixType, IndexType>& pinv_meas, 
+		const MatrixDynamicDense<bool>& visibility,
+		const MatrixColSparse<MatrixType, IndexType>& normalisations,
+		const MatrixColSparse<MatrixType, IndexType>& img_meas,
+		const MatrixDynamicDense<MatrixType>& points,
+		const Vector<int>& known_points,	//all positive values in pathway
+		const Vector<int>& rejected_views,
+		const Vector<int>& eligibles,
+		const int level,
+		const Options& options = Options())
+	{
+		if (options.debuginform == Options::InformDebug::VERBOSE)
+		{
+			std::cout << " Trying to add " << eligibles.size() << " eligible(s) view(s) at level: " << level << std::endl;
+		}
+
+		int num_added = 0;
+
+		for (size_t i = 0; i < eligibles.size(); i++)
+		{
+			//get a list of indices alonst a certain row
+			Vector<int> visible_points(visibility.cols());
+			int count = 0;
+			for (size_t j = 0; j < known_points.size(); j++)
+			{
+				if (visibility(eligibles(i), known_points(j)) == true)
+				{
+					visible_points(count) = known_points(j);
+					count++;
+				}
+			}
+			//std::cout << "VISIBLE: " << visible_points.block(0, 0, 1, count) << std::endl;
+			
+			if (options.debuginform >= Options::InformDebug::REGULAR)
+			{
+				std::cout << "View: " << eligibles(i) << " (" << visible_points.block(0, 0, 1, count).size() <<
+					" visible points, rejected "  /*INSERT  rejected_views(eligibles(idx_view)) HERE*/ << ")" << std::endl;
+			}
+
+			if (options.robust_estimation)
+			{
+				//start with robust
+				EstimateViewRobust(data,pinv_meas,points,visible_points.block(0, 0, 1, count),eligibles(i),rejected_views,normalisations,img_meas,level,options);
+			}
+			else
+			{
+				std::cout << "NOT ROBUSt";
+
+			}
 		}
 	}
 
@@ -1820,6 +1970,11 @@ namespace P2SFM
 				Vector<double> scores;
 				std::tie(scores,eligibles)= SearchEligibleViews(options.eligibility_view.col(level_views), visibility, copyPath, Eigen::Vector2i(-init_output.pathway(1),-init_output.pathway(3)), rejected_views, pvs_scores);
 				int x = 10;
+
+				if (eligibles.size() != 0)
+				{
+					TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output.points, copyPath,rejected_views, eligibles, level_views, options);
+				}
 			}
 		}
 	}
