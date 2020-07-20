@@ -32,7 +32,7 @@ namespace P2SFM
 	{
 		//a vector is sorted in descending order, the matrix cols are then are arranged in the same manner as the vector was sorted
 		template <typename VecType, typename MatrixType>
-		void sortVectorAndMatrix(std::vector<VecType>&vec, MatrixDynamicDense<MatrixType>& mat) 
+		void sortVectorAndMatrix(std::vector<VecType>&vec, Eigen::Matrix<MatrixType,Eigen::Dynamic,Eigen::Dynamic>& mat, bool rowSort=true) 
 		{
 			// initialize original index locations
 			std::vector<size_t> idxVec(vec.size());
@@ -47,9 +47,16 @@ namespace P2SFM
 			//TODO:
 			//can prevent making a copy of the matrix by swapping cols instead and keeping track of where the real one goes
 			MatrixDynamicDense<MatrixType> temp(mat);
-			for (size_t i = 0; i < mat.rows(); i++)
+			for (size_t i = 0; i < (rowSort?mat.rows():mat.cols()); i++)
 			{
-				mat.row(i).swap(temp.row(idxVec[i]));
+				if (rowSort)
+				{
+					mat.row(i).swap(temp.row(idxVec[i]));
+				}
+				else
+				{
+					mat.col(i).swap(temp.col(idxVec[i]));
+				}
 			}
 		}
 
@@ -571,9 +578,10 @@ namespace P2SFM
 		int GetHeight() { return height; };
 
 		//Compute the pyramidal visibility score of the current projections, normalized by the maximum score if required
-		int ComputeScore(bool normalizeScore = false) 
+		//returns a double in case the score is normalized
+		double ComputeScore(bool normalizeScore = false) 
 		{
-			int score = 0;
+			double score = 0.0;
 
 			//level is at least one and at least 1 nnz in proj_count
 			if (level > 0 && proj_count.nonZeros()!=0)
@@ -800,8 +808,8 @@ namespace P2SFM
 		int score_level = 6; // Number of levels used in the pyramidal vsibility score
 		//eligibility thresholds for views at each level(min visible points),take only this maximum number of views, ordered by the PVS score)
 		Eigen::Matrix<int, 2, 9> eligibility_view = (Eigen::Matrix<int,2,9>() << 84, 60, 48, 36, 24, 18, 12, 10, 8, 8, 4, 4, 2, 2, 2, 1, 1, 1).finished();
-		int init_level_views = 1; // the initial level of eligibility thresholds for views
-		int max_level_views = 5; // the maximum level of eligibility thresholds for views
+		int init_level_views = 0; // the initial level of eligibility thresholds for views
+		int max_level_views = 4; // the maximum level of eligibility thresholds for views
 		int eligibility_point[9] = { 10,9, 8,7, 6, 5, 4, 3, 2 }; // eligibility thresholds for points at each level
 		int init_level_points = 6; // the initial level of eligibility thresholds for points
 		int max_level_points = 7; // the maximum level of eligibility thresholds for points
@@ -1047,7 +1055,10 @@ namespace P2SFM
 		//const int numViews = visibility.rows();
 		const int num_pairs = (visibility.rows()*(visibility.rows() + 1) ) / 2;
 
+		//REPLACE WITH VECTOR<int>??
+		//Vector<int> affinity(num_pairs);
 		std::vector<int> affinity;
+		
 		affinity.resize(num_pairs, 2);
 		
 		MatrixDynamicDense<int> view_pairs(num_pairs, 2);	//keep track of what firstView is being compared with what secondView
@@ -1546,6 +1557,136 @@ namespace P2SFM
 	}
 
 	/*
+	  Display some information allowing diagnosis of the reconstruction given in cameras and points.
+	  Depending on the options, this is mainly some graphical figure, but some console text output can also be included.
+	  This diagnosis can also be saved to a file which can be reloaded later by calling this functions with only the filename.
+
+	  Input:
+		* inliers : Inliers matrix binary mask(FxN)
+		* visible : Visibility matrix binary mask(FxN)
+		* InitialSolveOutput init_output:
+			* cameras : Projective estimation of the cameras that has been completed(3Fx4)
+			* points : Projective estimation of the points that has been completed(4xN)
+			* pathway : Array containing the order in which views(negative) and points(positive) has been added(1 x k, k <= F + N)
+		* normalisations : Normalisation transformation for each camera stacked vertically(3Fx3)
+		* img_measurements : Original image measurements of the projections, used for computing reprojection errors(3FxN)
+		* centers : Principal points coordinates for each camera(2xF)
+		* iter : Iteration number when called from the completion loop
+			* options : Structure containing options(must be initialized by ppsfm_options to contains all necessary fields)
+		* fig_base : Numeric handle to use for the first figure, next ones will increments this*/
+	template <typename MatrixType, typename IndexType>
+	void Diagnosis(
+		const MatrixColSparse<MatrixType, IndexType>& inliers,
+		const MatrixDynamicDense<bool>& visibility,
+		const InitialSolveOutput<MatrixType>& init_output,
+		const MatrixColSparse<MatrixType, IndexType>& normalisations,
+		const MatrixColSparse<MatrixType, IndexType>& img_meas,
+		const MatrixDynamicDense<MatrixType>& centers,
+		const Options& options = Options(),
+		const int fig_base = 0
+	)
+	{
+
+	}
+
+
+		//TODO:
+		//BETTER DESCRIPTION
+		std::tuple<Vector<double> , Vector<int>>
+		SearchEligibleViews(
+		const Eigen::Vector2i& thresholds,
+		const MatrixDynamicDense<bool>& visibility,
+		const Vector<int>& known_points,
+		const Vector<int>& known_views,
+		Vector<int>& rejected_views,
+		std::vector<PyramidalVisibilityScore>& pvs_scores)
+	{
+		const int num_views = visibility.rows();
+
+		Vector<bool> unknown_views(num_views);
+		unknown_views.setOnes();	//which views do we not have info on right now??
+		for (size_t i = 0; i < known_views.size(); i++)	//should only be 2 elements but do this to be sure
+		{
+			unknown_views(known_views(i)) = false;
+		}
+
+		//number of visible points per view, considering only 'known' points
+		Vector<int> num_visible_points(num_views);
+		num_visible_points.setZero();
+
+		for (size_t i = 0; i < num_visible_points.size(); i++)
+		{
+			if (unknown_views(i) == true)
+			{
+				int count = 0;
+				for (size_t j = 0; j < known_points.size(); j++)
+				{
+					if (visibility(i, known_points(j)) == true)
+					{
+						count++;
+					}
+				}
+				num_visible_points(i) = count;
+			}
+			//TODO: UPDATE EIGEN TO 3.4 ON RELEASE, ALLOWING TO GET LIST OF INDICES FROM MATRIX
+		}
+
+
+		//is there enough data per view to consider further testing??
+		for (size_t i = 0; i < unknown_views.size(); i++)
+		{
+			if (num_visible_points(i) <= rejected_views(i) ||
+				num_visible_points(i) < thresholds(0))
+			{
+				unknown_views(i) = false;
+			}
+		}
+
+
+		//compute scores for views that are considered eligible
+		std::vector<double> scores(num_views,0);
+		scores.reserve(num_views);
+		//Vector<double> scores(num_views);
+		MatrixDynamicDense<int> eligibles(1, num_views);
+		Vector<int> eligibles_compressed(1, num_views);
+		int count = 0;
+		for (int i = 0; i < pvs_scores.size(); i++)
+		{
+			if (unknown_views(i) == true)
+			{
+				scores[i] = pvs_scores[i].ComputeScore(true) * 100.0;
+				
+				eligibles(0,i) = i;
+				eligibles_compressed(count) = i;
+				count++;
+			}
+			else
+			{
+				eligibles(0,i) = -1; //invalid values
+			}
+		}
+
+
+		//all scores are returned so we can easily identify the corresponding view with eligibles
+		if ( count > thresholds(1))
+		{
+			//too much eligibles, get best x number 
+			//sort scores and get best id's
+			EigenHelpers::sortVectorAndMatrix(scores, eligibles,false);
+			auto scoresVec = EigenHelpers::StdVecToEigenVec(scores);
+			return { scoresVec,eligibles.block(0,0,1,thresholds(1)) };
+
+		}
+		else
+		{
+			//get id's of eligible
+			eligibles_compressed.conservativeResize(count);
+			auto scoresVec = EigenHelpers::StdVecToEigenVec(scores);
+			return { scoresVec,eligibles.block(0,0,1,thresholds(1)) };
+		}
+	}
+
+	/*
 	   Complete the initial factorization provided in cameras and points under the constraint
 	   defined by the pathway and fixed entries.
 	   Use only the visible entries for which measurements are given as there pseudo inverse(pinv_meas) and a data matrix.
@@ -1561,7 +1702,7 @@ namespace P2SFM
 		* img_meas : Unnormaliazed measurements of the projections, used for computing errors and scores(3FxN)
 		* img_sizes : Size of the images, used to compute the pyramidal visibility scores(2xF)
 		* centers : Principal points coordinates for each camera(2xF)
-		* cam_point_locations: struct containing the struct return value from P2SFM::Initialisation():
+		* cam_point_locations: struct containing the struct return value from P2SFM::Initialisation()
 			* cameras : Initial cameras estimation(3Fx4 or 3kx4 if k cameras in the initial sub - problem)
 			* points : Initial points estimation(4xN or 4xk if k points in the initial sub - problem)
 			* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points(1 x F + N)
@@ -1637,7 +1778,6 @@ namespace P2SFM
 				}
 			}
 
-
 			if (img_sizes.cols()==1)
 			{
 				pvs_scores[i] = PyramidalVisibilityScore(img_sizes(0, 0), img_sizes(1, 0), options.score_level,projs.block(0, 0, 2, counter));
@@ -1646,24 +1786,18 @@ namespace P2SFM
 			{
 				pvs_scores[i] = PyramidalVisibilityScore(img_sizes(0, i), img_sizes(1, i), options.score_level, projs.block(0, 0, 2, counter));
 			}
-
-			//if size(img_sizes, 2) == 1
-			//	pvs_scores{ view } = PyramidalVisibilityScore(img_sizes(1), img_sizes(2), level, projs);
-			//else
-			//	pvs_scores{ view } = PyramidalVisibilityScore(img_sizes(1, view), img_sizes(2, view), level, projs);
-			//end
 		}
 
 
 		//eligibility threshold levels
-		bool level_changed;
+		bool level_changed = false;
 		int level_views = std::max(options.init_level_views, options.max_level_views);
 		int level_points = std::max(options.init_level_points, options.max_level_points);
 
 		//get amount of values in pathway <0
 		int num_known_views = (init_output.pathway.array() < 0).count();
 		int num_known_points = (init_output.pathway.array() > 0).count();	//>0 to avoid empty values appended at the end
-		int num_added_views, num_added_points;
+		int num_added_views = num_known_points, num_added_points = num_known_points;
 
 		int num_iter = 0;
 		int iter_refine = 0;
@@ -1671,7 +1805,8 @@ namespace P2SFM
 		//ppsfm_diagnosis()
 
 		//main loop 
-		//while ((num_known_points < num_points || num_known_views < num_views) && )
+		while ((num_known_points < num_points || num_known_views < num_views) &&
+			(level_changed || num_added_views + num_added_points >0) )
 		{
 			level_changed = false;
 			num_added_points = 0;
@@ -1680,10 +1815,13 @@ namespace P2SFM
 			//process views
 			if (num_known_views < num_views)
 			{
-
+				//search_eligible_views
+				Vector<int> eligibles;
+				Vector<double> scores;
+				std::tie(scores,eligibles)= SearchEligibleViews(options.eligibility_view.col(level_views), visibility, copyPath, Eigen::Vector2i(-init_output.pathway(1),-init_output.pathway(3)), rejected_views, pvs_scores);
+				int x = 10;
 			}
 		}
 	}
-
 
 }
