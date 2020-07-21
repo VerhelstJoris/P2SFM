@@ -86,6 +86,23 @@ namespace P2SFM
 			return (Array<T>)map;
 		}
 
+		template <typename MatrixType, typename IndexType>
+		void GetSubMatSparse(const MatrixColSparse<MatrixType, IndexType>& matrix, 
+			MatrixDynamicDense<MatrixType>& subMat, const int rowId, const int colId)
+		{
+			for (int k = colId; k < colId + subMat.cols(); ++k)
+			{
+				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(matrix, k); it; ++it)
+				{
+					if (it.row() >= rowId && it.row() < rowId + subMat.rows())
+					{
+						subMat.coeffRef(it.row() - rowId, k - colId) = it.value();
+					}
+				}
+			}
+
+		}
+
 		enum ESTIMATION_METHOD
 		{
 			DEFAULT,
@@ -314,7 +331,7 @@ namespace P2SFM
 		template <typename MatrixType>
 		void RandPerm(std::vector<MatrixType>& vec, const MatrixType minVal, const MatrixType maxVal)
 		{
-			std::generate(vec.begin(), vec.end(), [&vec]()
+			std::generate(vec.begin(), vec.end(), [&vec, minVal, maxVal]()
 			{ 
 				MatrixType num;
 				do
@@ -1637,6 +1654,164 @@ namespace P2SFM
 	}
 
 
+	/*
+	Estimate a new view given points and an index of the ones for which the projections are visibles.
+	These projections are supplied as the pseudo inverse of the normalized measurements and a data matrix.
+	Use only a given number of entries to fix the constraint.
+		
+	Input:
+		* data : Matrix containing the data to compute the cost function(2Fx3N)
+		* pinv_meas : Matrix containing the data for elimination of projective depths,
+		                 cross - product matrix or pseudo - inverse of the of the normalized homogeneous coordinates(Fx3N)
+		* points : Projective points estimations(4xN)
+		* idx_points : Indexes of the points to used in the estimation, ordered to have the ones used in the constraint first
+		* new_view : Index of the view to estimate
+		* num_fixed : Number of points to use in the constraint
+		* tol_rank : Tolerance used to detect degenerate case (used on the qr decomposition to determine the rank)
+	Output:
+		 * estim : Projective estimation of the view
+		 * sys : Linear system minimized
+		 * con : Linear constraint used
+		 * pos : Linear transformation to compute projective depths*/
+	template <typename MatrixType, typename IndexType>
+	std::tuple<VectorVertical<MatrixType>, MatrixDynamicDense<MatrixType>, Vector<MatrixType>, MatrixDynamicDense<MatrixType> >
+		EstimateView(
+		const MatrixColSparse<MatrixType, IndexType>& data,
+		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
+		const MatrixDynamicDense<MatrixType>& points, 
+		Vector<int>& id_points,	//MAKE CONST LATER
+		const int new_view,
+		const int num_fixed,
+		const double tol_rank = 1e-6)
+	{
+
+		//TEST SET
+		//TODO: REMOVE
+		id_points << 186, 250, 244, 214, 174, 225, 171, 198, 189;
+
+		const int num_points = id_points.size();
+
+		int new_view_id = 2 * new_view; 
+
+		MatrixDynamicDense<MatrixType> sys(2 * num_points, 12); //LLS system
+		MatrixDynamicDense<MatrixType> pos(num_points, 12); // positivity constraint (projective depths)
+		MatrixDynamicDense<MatrixType> G(3, 12);
+		Vector<MatrixType> con(12); // Linear equality constraint (fixes sum of the fixed projective depths)
+
+		sys.setZero(); pos.setZero(); con.setZero(); G.setZero();
+
+		for (size_t i = 0; i < num_points; i++)
+		{
+			int point_id = 3 * id_points(i) - 3;
+
+			auto subMat = points.block(0, id_points(i), 4, 1).transpose();
+			G.block(0, 0, 1, 4) = subMat;
+			G.block(1, 4, 1, 4) = subMat;
+			G.block(2, 8, 1, 4) = subMat;
+
+			//data is sparse matrix so retrieving data is difficult
+			MatrixDynamicDense<MatrixType>dataMat(2, 3);
+			dataMat.setZero();
+
+			EigenHelpers::GetSubMatSparse(data, dataMat, new_view_id, point_id);
+
+			sys.block(2 * i, 0, 2, sys.cols()) = dataMat * G;
+
+			MatrixDynamicDense<MatrixType>pinv_mat(1, 3);
+			EigenHelpers::GetSubMatSparse(pinv_meas, pinv_mat, new_view, point_id);
+			pos.row(i) = pinv_mat * G;
+
+			if (i <= num_fixed)	//constraint on the first points
+			{
+				con += pos.row(i);
+			}
+
+		}
+
+		con = con / num_fixed; //Renormalize the constraint so that it is equal to 1
+
+
+		//solve the LLS system imposing only the equality constraint 
+		MatrixDynamicDense<MatrixType>A = sys.block(0, 1, sys.rows(), sys.cols() - 1) - sys.block(0, 0, sys.rows(), 1) * con.block(0,1,1,con.cols()-1) / con(1);
+
+		VectorVertical<MatrixType>b = -sys.block(0, 0, sys.rows(), 1) / con(1);
+
+
+		//[___] = qr(A, 0) produces an economy - size decomposition using any of the previous output argument combinations.The size of the outputs depends on the size of m - by - n matrix A :
+		//If m > n, then qr computes only the first n columns of Q and the first n rows of R.
+		//	If m <= n, then the economy - size decomposition is the same as the regular decomposition.
+		//	If you specify a third output with the economy - size decomposition, then it is returned as a permutation vector such that A(:, P) = Q * R.
+		Eigen::ColPivHouseholderQR<MatrixDynamicDense<MatrixType>> qr(A);
+
+		qr.compute(A);
+		MatrixDynamicDense<MatrixType> r = qr.matrixQR().triangularView<Eigen::Upper>();
+		MatrixDynamicDense<MatrixType> q = qr.matrixQ();
+		MatrixDynamicDense<MatrixType> p = qr.colsPermutation();
+
+		std::cout << std::endl << "R: " << std::endl << r << std::endl;
+		std::cout << std::endl << "Q: " << std::endl << q.block(0, 0, q.rows(), A.cols()) << std::endl;
+
+		Vector<int> pp(p.rows());
+		for (size_t i = 0; i < p.rows(); i++)
+		{
+			//(p.row(i).array()>0)
+			for (size_t j = 0; j < p.cols(); j++)
+			{
+				if (p(i, j) == 1)
+				{
+					pp(i) = j;
+					break;
+				}
+			}
+		}
+
+		std::cout << std::endl << "P: " << std::endl << pp << std::endl;
+
+
+		bool found = false;
+		for (size_t i = 0; i < r.cols(); i++)
+		{
+			if (abs(r(i, i)) < tol_rank)
+			{
+				found = true;
+				break;
+			}
+		}
+
+		//check if there's a single value in diagonal mat R < tol_rank
+		if (found)
+		{
+			//return empty
+			VectorVertical<MatrixType> estim(0);
+			return { estim,sys,con,pos };
+		}
+		else
+		{
+			VectorVertical<MatrixType> d = q.block(0, 0, q.rows(), A.cols()).transpose() * b;
+			std::cout << "D: " << d.rows() << " " << d.cols() << std::endl << d << std::endl; 
+			std::cout << "R: " << r.rows() << " " << r.cols() << std::endl << r << std::endl; 
+
+			//MatrixDynamicDense<MatrixType> x = r.block(0,0,r.cols(),r.cols()) \d;
+			VectorVertical<MatrixType> x = (r.block(0, 0, r.cols(), r.cols())).colPivHouseholderQr().solve(d);
+
+
+			std::cout << "x: " << x.size()  << std::endl << x << std::endl;
+
+			//shuffle x around based on column permutation p
+			VectorVertical<MatrixType> xCopy(x.size());
+			for (size_t i = 0; i < x.size(); i++)
+			{
+				xCopy(i) = x(pp(i));
+			}
+
+			VectorVertical<MatrixType> estim(x.size() + 1);
+			MatrixType val = (1 / con(0)) - (con.block(0, 1, 1, con.size() - 1) / con(0)*x)(0);
+			estim << val, xCopy;
+
+			return { estim,sys,con,pos };
+		}
+	}
+
 	/*   
 	Robustly estimate a new view given an index of points that are visible into it.
 	
@@ -1669,7 +1844,7 @@ namespace P2SFM
 		const Options& options = Options())
 	{
 	
-		const int viewId = 3 * new_view;
+		const int view_id = 3 * new_view;
 		const double log_conf = log(1 - options.confidence / 100);
 
 		int best_score = INT_MAX;
@@ -1682,6 +1857,14 @@ namespace P2SFM
 		{
 			auto test_set = AlgebraHelpers::RandomSubset(known_points, 0/*rejected_views*/, options.minimal_view[level]);
 
+			//get test_set indices from known_points
+			//test_set is not used after this point so can be reused
+			for (size_t i = 0; i < test_set.size(); i++)
+			{
+				test_set(i) = known_points(test_set(i));
+			}
+
+			EstimateView(data, pinv_meas, points, test_set, new_view, 5, options.rank_tolerance);	//6 -> 5 due to indexing
 		}
 	}
 
@@ -1827,6 +2010,7 @@ namespace P2SFM
 			{
 				//start with robust
 				EstimateViewRobust(data,pinv_meas,points,visible_points.block(0, 0, 1, count),eligibles(i),rejected_views,normalisations,img_meas,level,options);
+			
 			}
 			else
 			{
