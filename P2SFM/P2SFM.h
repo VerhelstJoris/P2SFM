@@ -1842,7 +1842,7 @@ namespace P2SFM
 
 	template <typename MatrixType, typename IndexType>
 	std::tuple<Vector<MatrixType>, Vector<MatrixType>>
-	ComputeReproj(
+	ComputeReprojection(
 		const VectorVertical<MatrixType>& estim,
 		const MatrixDynamicDense<MatrixType>& points,
 		const Vector<int>& points_id,
@@ -1852,7 +1852,6 @@ namespace P2SFM
 	{
 		//Denormalize the estimes camera
 		MatrixDynamicDense<MatrixType> normMat(3,3); 
-		normMat.setZero();
 		EigenHelpers::GetSubMatSparse(normalisations, normMat, view_id, view_id);
 
 		MatrixDynamicDense<MatrixType> estimMat(3, 4);
@@ -1861,7 +1860,6 @@ namespace P2SFM
 		MatrixDynamicDense<MatrixType> camera(3, 4);
 		camera= normMat.colPivHouseholderQr().solve(estimMat);
 
-		//std::cout << "NORMALISATIONS" << std::endl << points << std::endl;
 		MatrixDynamicDense<MatrixType> known_points(4,points_id.size());
 
 		int count=0;
@@ -1872,6 +1870,7 @@ namespace P2SFM
 		}
 
 		MatrixDynamicDense<MatrixType> scaled_measurements = camera * known_points;
+
 		MatrixDynamicDense<MatrixType> reprojections(scaled_measurements);
 
 		for (size_t i = 0; i < reprojections.cols(); i++)	//element wise division
@@ -1879,18 +1878,12 @@ namespace P2SFM
 			reprojections.col(i) = reprojections.col(i) / scaled_measurements(2, i);
 		}
 
-		//std::cout << "reprojections" << std::endl << reprojections << std::endl;
-
 		MatrixDynamicDense<MatrixType> imgSub(3, points_id.size());	//all valid values so dense matrix
 		EigenHelpers::GetSubMatSparse(img_meas, imgSub, view_id, points_id);
-		//std::cout << "imgSub" << std::endl << imgSub << std::endl;
 
 		MatrixDynamicDense<MatrixType> reproj_error = reprojections - imgSub;
-		//std::cout << "reproj_error" << std::endl << reproj_error << std::endl;
 
 		Vector<MatrixType> result = (reproj_error.row(0).array().pow(2) + reproj_error.row(1).array().pow(2)).array().sqrt();
-
-		//std::cout << "result" << std::endl << result << std::endl;
 
 		return { result, scaled_measurements.row(2) };
 	}
@@ -1898,17 +1891,50 @@ namespace P2SFM
 	//estimation, points, idx_points, idx_view, ...
 	//normalisations, img_meas, threshold, sort_inliers)
 	template <typename MatrixType, typename IndexType>
-	void FindInliers(
+	std::tuple<Vector<MatrixType>,MatrixType, Vector<int> >
+	FindInliers(
 		const VectorVertical<MatrixType>& estim,
 		const MatrixDynamicDense<MatrixType>& points,
 		const Vector<int>& known_points,
 		const int view_id,
 		const MatrixColSparse<MatrixType, IndexType>& normalisations,
 		const MatrixColSparse<MatrixType, IndexType>& img_meas,
-		const double threshold
-		)
+		const double threshold)
 	{
-		ComputeReproj(estim, points, known_points, view_id, normalisations, img_meas);
+
+		Vector<MatrixType> reproj_error, depths;
+		std::tie(reproj_error,depths) = ComputeReprojection(estim, points, known_points, view_id, normalisations, img_meas);
+
+		//get id's of all reproj_error entries <= threshold
+		Vector<int> inliers((reproj_error.array() <= threshold).count());
+		Vector<MatrixType> reproj_errors_sub(inliers.size());
+
+		MatrixType score= (MatrixType)0;
+
+		int count = 0;
+		for (size_t i = 0; i < reproj_error.size(); i++)
+		{
+			if (reproj_error(i) <= threshold)
+			{
+				inliers(count) = i;
+				score += reproj_error(i);
+				reproj_errors_sub(count) = reproj_error(i);
+
+				count++;
+			}
+		}
+
+		//last condition/input argument
+		//if nargin > 7 && sort_inliers
+		//	[~, idx] = sort(reproj_errs(inliers));
+		//inliers = inliers(idx);
+		//end
+
+		score += (known_points.size() - inliers.size())*threshold;
+		std::cout << "SCORE: " << score << std::endl;
+
+		//return reproj_errors_sub/score/inliers
+		return { reproj_errors_sub, score, inliers };
 	}
 
 	/*   
