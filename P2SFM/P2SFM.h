@@ -1702,7 +1702,7 @@ namespace P2SFM
 
 		for (size_t i = 0; i < num_points; i++)
 		{
-			int point_id = 3 * id_points(i) - 3;
+			int point_id = 3 * id_points(i);
 
 			auto subMat = points.block(0, id_points(i), 4, 1).transpose();
 			G.block(0, 0, 1, 4) = subMat;
@@ -1721,14 +1721,20 @@ namespace P2SFM
 			EigenHelpers::GetSubMatSparse(pinv_meas, pinv_mat, new_view, point_id);
 			pos.row(i) = pinv_mat * G;
 
+			//std::cout << "PINV: " << std::endl << pinv_mat << std::endl;
+			//std::cout << "G: " << std::endl << G << std::endl;
+			//std::cout << "POSROW: " << pos.row(i) << std::endl;
+
 			if (i <= num_fixed)	//constraint on the first points
 			{
-				con += pos.row(i);
+				con =con+ pos.row(i);
 			}
 
+			int x = 10;
 		}
 
-		con = con / num_fixed; //Renormalize the constraint so that it is equal to 1
+		con = con / (num_fixed+1); //Renormalize the constraint so that it is equal to 1
+		//std::cout << "CONFINAL: " << con << std::endl;
 
 
 		//solve the LLS system imposing only the equality constraint 
@@ -1748,8 +1754,8 @@ namespace P2SFM
 		MatrixDynamicDense<MatrixType> q = qr.matrixQ();
 		MatrixDynamicDense<MatrixType> p = qr.colsPermutation();
 
-		std::cout << std::endl << "R: " << std::endl << r << std::endl;
-		std::cout << std::endl << "Q: " << std::endl << q.block(0, 0, q.rows(), A.cols()) << std::endl;
+		//std::cout << std::endl << "R: " << std::endl << r << std::endl;
+		//std::cout << std::endl << "Q: " << std::endl << q.block(0, 0, q.rows(), A.cols()) << std::endl;
 
 		Vector<int> pp(p.rows());
 		for (size_t i = 0; i < p.rows(); i++)
@@ -1764,8 +1770,6 @@ namespace P2SFM
 				}
 			}
 		}
-
-		std::cout << std::endl << "P: " << std::endl << pp << std::endl;
 
 
 		bool found = false;
@@ -1788,24 +1792,22 @@ namespace P2SFM
 		else
 		{
 			VectorVertical<MatrixType> d = q.block(0, 0, q.rows(), A.cols()).transpose() * b;
-			std::cout << "D: " << d.rows() << " " << d.cols() << std::endl << d << std::endl; 
-			std::cout << "R: " << r.rows() << " " << r.cols() << std::endl << r << std::endl; 
+			//std::cout << "D: " << d.rows() << " " << d.cols() << std::endl << d << std::endl; 
+			//std::cout << "R: " << r.rows() << " " << r.cols() << std::endl << r << std::endl; 
 
 			//MatrixDynamicDense<MatrixType> x = r.block(0,0,r.cols(),r.cols()) \d;
 			VectorVertical<MatrixType> x = (r.block(0, 0, r.cols(), r.cols())).colPivHouseholderQr().solve(d);
 
-
-			std::cout << "x: " << x.size()  << std::endl << x << std::endl;
-
 			//shuffle x around based on column permutation p
-			VectorVertical<MatrixType> xCopy(x.size());
+			VectorVertical<MatrixType> xCopy(x.size()); 
 			for (size_t i = 0; i < x.size(); i++)
 			{
 				xCopy(i) = x(pp(i));
 			}
 
 			VectorVertical<MatrixType> estim(x.size() + 1);
-			MatrixType val = (1 / con(0)) - (con.block(0, 1, 1, con.size() - 1) / con(0)*x)(0);
+			
+			MatrixType val = (1 / con(0)) - (con.block(0, 1, 1, con.size() - 1) / con(0)*xCopy)(0);
 			estim << val, xCopy;
 
 			return { estim,sys,con,pos };
@@ -1849,7 +1851,6 @@ namespace P2SFM
 
 		int best_score = INT_MAX;
 
-
 		int max_iter = options.max_iter_robust[1];
 
 		//main loop
@@ -1863,8 +1864,19 @@ namespace P2SFM
 			{
 				test_set(i) = known_points(test_set(i));
 			}
+			//	std::tuple<VectorVertical<MatrixType>, MatrixDynamicDense<MatrixType>, Vector<MatrixType>, MatrixDynamicDense<MatrixType> >
+			VectorVertical<MatrixType> estim;
+			MatrixDynamicDense<MatrixType> sys, pos;
+			Vector<MatrixType> con;
+			std::tie(estim,sys,con,pos)=EstimateView(data, pinv_meas, points, test_set, new_view, 5, options.rank_tolerance);	//6 -> 5 due to indexing
+		
 
-			EstimateView(data, pinv_meas, points, test_set, new_view, 5, options.rank_tolerance);	//6 -> 5 due to indexing
+			if (estim.size() != 0 && (sys * estim).norm() / sqrt(sys.rows()) <= options.system_threshold)
+			{
+				std::cout << "HES DONE IT";
+			}
+
+			int x = 10;
 		}
 	}
 
