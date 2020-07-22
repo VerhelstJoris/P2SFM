@@ -86,10 +86,13 @@ namespace P2SFM
 			return (Array<T>)map;
 		}
 
+		//TODO: restructure the following 2 functions to be less redundant
 		template <typename MatrixType, typename IndexType>
 		void GetSubMatSparse(const MatrixColSparse<MatrixType, IndexType>& matrix, 
 			MatrixDynamicDense<MatrixType>& subMat, const int rowId, const int colId)
 		{
+			subMat.setZero();
+
 			for (int k = colId; k < colId + subMat.cols(); ++k)
 			{
 				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(matrix, k); it; ++it)
@@ -100,7 +103,30 @@ namespace P2SFM
 					}
 				}
 			}
+		}
 
+		//list of id's instead of starting id for col
+		template <typename MatrixType, typename IndexType>
+		void GetSubMatSparse(const MatrixColSparse<MatrixType, IndexType>& matrix,
+			MatrixDynamicDense<MatrixType>& subMat, const int rowId, const Vector<int>& colIds)
+		{
+			if (subMat.cols() != colIds.size())
+			{
+				subMat.resize(subMat.rows(), colIds.size());
+			}
+
+			subMat.setZero();
+
+			for (int k = 0; k < colIds.size(); ++k)
+			{
+				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(matrix, colIds(k) ); it; ++it)	//go look through next col in colids
+				{
+					if (it.row() >= rowId && it.row() < rowId + subMat.rows())
+					{
+						subMat.coeffRef(it.row() - rowId, k) = it.value();
+					}
+				}
+			}
 		}
 
 		enum ESTIMATION_METHOD
@@ -1814,6 +1840,77 @@ namespace P2SFM
 		}
 	}
 
+	template <typename MatrixType, typename IndexType>
+	std::tuple<Vector<MatrixType>, Vector<MatrixType>>
+	ComputeReproj(
+		const VectorVertical<MatrixType>& estim,
+		const MatrixDynamicDense<MatrixType>& points,
+		const Vector<int>& points_id,
+		const int view_id,
+		const MatrixColSparse<MatrixType, IndexType>& normalisations,
+		const MatrixColSparse<MatrixType, IndexType>& img_meas)
+	{
+		//Denormalize the estimes camera
+		MatrixDynamicDense<MatrixType> normMat(3,3); 
+		normMat.setZero();
+		EigenHelpers::GetSubMatSparse(normalisations, normMat, view_id, view_id);
+
+		MatrixDynamicDense<MatrixType> estimMat(3, 4);
+		estimMat << estim.block(0, 0, 4, 1).transpose(), estim.block(4, 0, 4, 1).transpose(), estim.block(8, 0, 4, 1).transpose();
+		
+		MatrixDynamicDense<MatrixType> camera(3, 4);
+		camera= normMat.colPivHouseholderQr().solve(estimMat);
+
+		//std::cout << "NORMALISATIONS" << std::endl << points << std::endl;
+		MatrixDynamicDense<MatrixType> known_points(4,points_id.size());
+
+		int count=0;
+		for (size_t i = 0; i < points_id.size(); i++)
+		{
+			known_points.col(count) = points.col(points_id(i));
+			count++;
+		}
+
+		MatrixDynamicDense<MatrixType> scaled_measurements = camera * known_points;
+		MatrixDynamicDense<MatrixType> reprojections(scaled_measurements);
+
+		for (size_t i = 0; i < reprojections.cols(); i++)	//element wise division
+		{
+			reprojections.col(i) = reprojections.col(i) / scaled_measurements(2, i);
+		}
+
+		//std::cout << "reprojections" << std::endl << reprojections << std::endl;
+
+		MatrixDynamicDense<MatrixType> imgSub(3, points_id.size());	//all valid values so dense matrix
+		EigenHelpers::GetSubMatSparse(img_meas, imgSub, view_id, points_id);
+		//std::cout << "imgSub" << std::endl << imgSub << std::endl;
+
+		MatrixDynamicDense<MatrixType> reproj_error = reprojections - imgSub;
+		//std::cout << "reproj_error" << std::endl << reproj_error << std::endl;
+
+		Vector<MatrixType> result = (reproj_error.row(0).array().pow(2) + reproj_error.row(1).array().pow(2)).array().sqrt();
+
+		//std::cout << "result" << std::endl << result << std::endl;
+
+		return { result, scaled_measurements.row(2) };
+	}
+
+	//estimation, points, idx_points, idx_view, ...
+	//normalisations, img_meas, threshold, sort_inliers)
+	template <typename MatrixType, typename IndexType>
+	void FindInliers(
+		const VectorVertical<MatrixType>& estim,
+		const MatrixDynamicDense<MatrixType>& points,
+		const Vector<int>& known_points,
+		const int view_id,
+		const MatrixColSparse<MatrixType, IndexType>& normalisations,
+		const MatrixColSparse<MatrixType, IndexType>& img_meas,
+		const double threshold
+		)
+	{
+		ComputeReproj(estim, points, known_points, view_id, normalisations, img_meas);
+	}
+
 	/*   
 	Robustly estimate a new view given an index of points that are visible into it.
 	
@@ -1873,7 +1970,8 @@ namespace P2SFM
 
 			if (estim.size() != 0 && (sys * estim).norm() / sqrt(sys.rows()) <= options.system_threshold)
 			{
-				std::cout << "HES DONE IT";
+				//FINDINLIERS()
+				FindInliers(estim, points, known_points, view_id, normalisations, img_meas, options.outlier_threshold);
 			}
 
 			int x = 10;
