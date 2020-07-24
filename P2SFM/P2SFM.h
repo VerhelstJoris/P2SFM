@@ -1871,10 +1871,10 @@ namespace P2SFM
 	}
 
 	template <typename MatrixType, typename IndexType>
-	void ComputeScore(
-		const VectorVertical<MatrixType>& estim,
+	double ComputeScore(
+		const VectorVertical<MatrixType>& estimation,
 		const MatrixDynamicDense<MatrixType>& points,
-		const Vector<int>& known_points,
+		const Vector<int>& points_id,
 		const int view_id,
 		const MatrixColSparse<MatrixType, IndexType>& normalisations,
 		const MatrixColSparse<MatrixType, IndexType>& img_meas,
@@ -1882,9 +1882,18 @@ namespace P2SFM
 		const Vector<int>& inliers)
 	{
 
+		auto reproj_error = ComputeReprojection(estimation, points, points_id, view_id, normalisations, img_meas);
 
+		//get all inliers in reproj_error
 
+		double score = 0.0;
+		for (size_t i = 0; i < inliers.size(); i++)
+		{
+			score += std::get<0>(reproj_error)(inliers(i));
+		}
 
+		score += ( points_id.size() - inliers.size()) *threshold;
+		return score;
 	}
 
 	template <typename MatrixType, typename IndexType>
@@ -2021,9 +2030,17 @@ namespace P2SFM
 
 					if (std::get<0>(result_final).size() != 0 && (std::get<1>(result_final) * std::get<0>(result_final)).norm() / sqrt(std::get<1>(result_final).rows()) <= options.system_threshold)
 					{
-						std::cout << "It: " << i;
-						//COMPUTE SCORE
-						ComputeScore(std::get<0>(result_final), points, known_points, view_id, normalisations, img_meas, options.outlier_threshold, inliers);
+						double score =ComputeScore(std::get<0>(result_final), points, known_points, view_id, normalisations, img_meas, options.outlier_threshold, inliers);
+						
+						if (score < best_score)
+						{
+							best_score = score;
+							//save estimation, inleirs
+
+							//adaptive maximum number of iterations
+							double ratio = inliers.size() / known_points.size();
+						}
+					
 					}
 
 				}
