@@ -1705,16 +1705,11 @@ namespace P2SFM
 		const MatrixColSparse<MatrixType, IndexType>& data,
 		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
 		const MatrixDynamicDense<MatrixType>& points, 
-		Vector<int>& id_points,	//MAKE CONST LATER
+		const Vector<int>& id_points,	//MAKE CONST LATER
 		const int new_view,
 		const int num_fixed,
 		const double tol_rank = 1e-6)
 	{
-
-		//TEST SET
-		//TODO: REMOVE
-		id_points << 186, 250, 244, 214, 174, 225, 171, 198, 189;
-
 		const int num_points = id_points.size();
 
 		int new_view_id = 2 * new_view; 
@@ -1747,27 +1742,17 @@ namespace P2SFM
 			EigenHelpers::GetSubMatSparse(pinv_meas, pinv_mat, new_view, point_id);
 			pos.row(i) = pinv_mat * G;
 
-			//std::cout << "PINV: " << std::endl << pinv_mat << std::endl;
-			//std::cout << "G: " << std::endl << G << std::endl;
-			//std::cout << "POSROW: " << pos.row(i) << std::endl;
-
 			if (i <= num_fixed)	//constraint on the first points
 			{
-				con =con+ pos.row(i);
+				con =con + pos.row(i);
 			}
-
-			int x = 10;
 		}
 
 		con = con / (num_fixed+1); //Renormalize the constraint so that it is equal to 1
-		//std::cout << "CONFINAL: " << con << std::endl;
 
+		MatrixDynamicDense<MatrixType>A = sys.block(0, 1, sys.rows(), sys.cols() - 1) - sys.block(0, 0, sys.rows(), 1) * con.block(0,1,1,con.cols()-1) / con(0);
 
-		//solve the LLS system imposing only the equality constraint 
-		MatrixDynamicDense<MatrixType>A = sys.block(0, 1, sys.rows(), sys.cols() - 1) - sys.block(0, 0, sys.rows(), 1) * con.block(0,1,1,con.cols()-1) / con(1);
-
-		VectorVertical<MatrixType>b = -sys.block(0, 0, sys.rows(), 1) / con(1);
-
+		VectorVertical<MatrixType>b = -sys.block(0, 0, sys.rows(), 1) / con(0);
 
 		//[___] = qr(A, 0) produces an economy - size decomposition using any of the previous output argument combinations.The size of the outputs depends on the size of m - by - n matrix A :
 		//If m > n, then qr computes only the first n columns of Q and the first n rows of R.
@@ -1779,9 +1764,6 @@ namespace P2SFM
 		MatrixDynamicDense<MatrixType> r = qr.matrixQR().triangularView<Eigen::Upper>();
 		MatrixDynamicDense<MatrixType> q = qr.matrixQ();
 		MatrixDynamicDense<MatrixType> p = qr.colsPermutation();
-
-		//std::cout << std::endl << "R: " << std::endl << r << std::endl;
-		//std::cout << std::endl << "Q: " << std::endl << q.block(0, 0, q.rows(), A.cols()) << std::endl;
 
 		Vector<int> pp(p.rows());
 		for (size_t i = 0; i < p.rows(); i++)
@@ -1818,9 +1800,7 @@ namespace P2SFM
 		else
 		{
 			VectorVertical<MatrixType> d = q.block(0, 0, q.rows(), A.cols()).transpose() * b;
-			//std::cout << "D: " << d.rows() << " " << d.cols() << std::endl << d << std::endl; 
-			//std::cout << "R: " << r.rows() << " " << r.cols() << std::endl << r << std::endl; 
-
+		
 			//MatrixDynamicDense<MatrixType> x = r.block(0,0,r.cols(),r.cols()) \d;
 			VectorVertical<MatrixType> x = (r.block(0, 0, r.cols(), r.cols())).colPivHouseholderQr().solve(d);
 
@@ -1839,6 +1819,8 @@ namespace P2SFM
 			return { estim,sys,con,pos };
 		}
 	}
+
+
 
 	template <typename MatrixType, typename IndexType>
 	std::tuple<Vector<MatrixType>, Vector<MatrixType>>
@@ -1888,10 +1870,25 @@ namespace P2SFM
 		return { result, scaled_measurements.row(2) };
 	}
 
-	//estimation, points, idx_points, idx_view, ...
-	//normalisations, img_meas, threshold, sort_inliers)
 	template <typename MatrixType, typename IndexType>
-	std::tuple<Vector<MatrixType>,MatrixType, Vector<int> >
+	void ComputeScore(
+		const VectorVertical<MatrixType>& estim,
+		const MatrixDynamicDense<MatrixType>& points,
+		const Vector<int>& known_points,
+		const int view_id,
+		const MatrixColSparse<MatrixType, IndexType>& normalisations,
+		const MatrixColSparse<MatrixType, IndexType>& img_meas,
+		const double threshold,
+		const Vector<int>& inliers)
+	{
+
+
+
+
+	}
+
+	template <typename MatrixType, typename IndexType>
+	std::tuple<Vector<MatrixType>, Vector<int>, MatrixType >
 	FindInliers(
 		const VectorVertical<MatrixType>& estim,
 		const MatrixDynamicDense<MatrixType>& points,
@@ -1931,10 +1928,9 @@ namespace P2SFM
 		//end
 
 		score += (known_points.size() - inliers.size())*threshold;
-		std::cout << "SCORE: " << score << std::endl;
 
 		//return reproj_errors_sub/score/inliers
-		return { reproj_errors_sub, score, inliers };
+		return { reproj_errors_sub, inliers,score };
 	}
 
 	/*   
@@ -1972,7 +1968,7 @@ namespace P2SFM
 		const int view_id = 3 * new_view;
 		const double log_conf = log(1 - options.confidence / 100);
 
-		int best_score = INT_MAX;
+		int best_score = INT_MAX/7;	//generic big value
 
 		int max_iter = options.max_iter_robust[1];
 
@@ -1983,21 +1979,54 @@ namespace P2SFM
 
 			//get test_set indices from known_points
 			//test_set is not used after this point so can be reused
-			for (size_t i = 0; i < test_set.size(); i++)
+			for (size_t j = 0; j < test_set.size(); j++)
 			{
-				test_set(i) = known_points(test_set(i));
+				test_set(j) = known_points(test_set(j));
 			}
-			//	std::tuple<VectorVertical<MatrixType>, MatrixDynamicDense<MatrixType>, Vector<MatrixType>, MatrixDynamicDense<MatrixType> >
-			VectorVertical<MatrixType> estim;
-			MatrixDynamicDense<MatrixType> sys, pos;
-			Vector<MatrixType> con;
-			std::tie(estim,sys,con,pos)=EstimateView(data, pinv_meas, points, test_set, new_view, 5, options.rank_tolerance);	//6 -> 5 due to indexing
+
+
+			test_set << 186, 250, 244, 214, 174, 225, 171, 198, 189;
+			std::cout << "TEST: SET" << std::endl << test_set << std::endl;
+
+
+			auto result_test_set = EstimateView(data, pinv_meas, points, test_set, new_view, 5, options.rank_tolerance);	//6 -> 5 due to indexing
 		
 
-			if (estim.size() != 0 && (sys * estim).norm() / sqrt(sys.rows()) <= options.system_threshold)
+			if (std::get<0>(result_test_set).size() != 0 && (std::get<1>(result_test_set) * std::get<0>(result_test_set)).norm() / sqrt(std::get<1>(result_test_set).rows()) <= options.system_threshold)
 			{
-				//FINDINLIERS()
-				FindInliers(estim, points, known_points, view_id, normalisations, img_meas, options.outlier_threshold);
+				Vector<MatrixType> reproj_errors;
+				double score;
+				Vector<int> inliers;
+
+
+				std::tie(reproj_errors,inliers,score) = FindInliers(std::get<0>(result_test_set), points, known_points, view_id, normalisations, img_meas, options.outlier_threshold);
+
+
+				if (inliers.size() >= options.minimal_view[level] && score < 7 * best_score)	//7 int_max??
+				{
+					//get all inliers from known_points
+					test_set.resize(inliers.size());
+					for (size_t j = 0; j < inliers.size(); j++)
+					{
+						test_set(j) = known_points(inliers(j));
+					}
+
+
+					auto result_final = EstimateView(data, pinv_meas, points, test_set, new_view, inliers.size()-1, options.rank_tolerance);
+				
+					//results vary too much
+					//std::cout << "ESTIMATION: " << std::endl << std::get<0>(result_final) << std::endl;
+					std::cout << "VAL: " << (std::get<1>(result_final) * std::get<0>(result_final)).norm() / sqrt(std::get<1>(result_final).rows()) 
+						<< " MATCH AGAINST: " << options.system_threshold << std::endl;
+
+					if (std::get<0>(result_final).size() != 0 && (std::get<1>(result_final) * std::get<0>(result_final)).norm() / sqrt(std::get<1>(result_final).rows()) <= options.system_threshold)
+					{
+						std::cout << "It: " << i;
+						//COMPUTE SCORE
+						ComputeScore(std::get<0>(result_final), points, known_points, view_id, normalisations, img_meas, options.outlier_threshold, inliers);
+					}
+
+				}
 			}
 
 			int x = 10;
