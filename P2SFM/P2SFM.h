@@ -20,6 +20,9 @@ template <typename Type> using VectorVertical = Eigen::Matrix<Type, Eigen::Dynam
 template <typename Type> using Array = Eigen::Array<Type, 1, Eigen::Dynamic>;
 
 
+const double min_diff_between_values = std::pow(2, -52);	//min difference between 2 values in matlab
+
+
 //TEST
 //TODO: REMOVE
 #include <chrono>
@@ -511,7 +514,7 @@ namespace P2SFM
 					inliers.setZero();
 					inliers = (errors.array() < distance_threshold).select(errors, inliers);
 
-					//inliers.nonzeros() does not work as expected with dense matrices
+					//inlier_points.nonzeros() does not work as expected with dense matrices
 					int nnzCount = (inliers.array() != MatrixType(0) ).count();
 					double score = inliers.array().sum() + (inliers.rows() - nnzCount) * distance_threshold;
 
@@ -520,11 +523,11 @@ namespace P2SFM
 					//is this the best match yet? (with enough elements present)
 					if (nnzCount > 8 && score < 7 * best_score)
 					{
-						//estimate all inliers coeffs	
+						//estimate all inlier_points coeffs	
 						//reuse subMat for this
 						subMat.resize(nnzCount, coeffs.cols());
 						int count = 0;
-						for (size_t j = 0; j < inliers.size(); j++)	//get all rows from coeffs that are inliers
+						for (size_t j = 0; j < inliers.size(); j++)	//get all rows from coeffs that are inlier_points
 						{
 							if(inliers[j] != 0)
 							{
@@ -553,10 +556,7 @@ namespace P2SFM
 
 							//adaptive maximum numbers of iterations
 							double ratio = (double)nnzCount / num_projs;
-							const double minVal = std::pow(2, -52);	//min difference between 2 values in matlab
-							double prob = std::max(minVal, std::min(1 - minVal, 1 - std::pow(ratio,8))); //clamp the ratio value
-
-
+							double prob = std::max(min_diff_between_values, std::min(1 - min_diff_between_values, 1 - std::pow(ratio,8))); //clamp the ratio value
 							last_iteration = std::min(int(std::ceil(log_conf / log(prob))), max_iterations);
 						}
 					}
@@ -565,7 +565,7 @@ namespace P2SFM
 			}
 
 
-			//best inliers has at least options.min_common_init amount of projection correspondences
+			//best inlier_points has at least options.min_common_init amount of projection correspondences
 
 			return { best_inliers ,best_estim };
 		}
@@ -1223,11 +1223,11 @@ namespace P2SFM
 		* projs2, the corresponding projections in the second image (2xN)
 		* method, method for robust estimation if wanted(currently only support 'ransac', an optimized implementation of RANSAC with MSAC score)
 		* confidence, the confidence to stop robust estimation early in RANSAC
-	    * max_iter, the maximum number of iterations in RANSAC
-	    * dist_thresh, the distance threshold for computing inliers in RANSAC
+	    * last_iteration, the maximum number of iterations in RANSAC
+	    * dist_thresh, the distance threshold for computing inlier_points in RANSAC
 	Output:
 		* fund_mat, the estimated fundamental matrix(3x3)
-		* inliers, a binary or index vector indicating the projections used in the estimation
+		* inlier_points, a binary or index vector indicating the projections used in the estimation
 	*/
 	template <typename MatrixType>
 	std::tuple< MatrixDynamicDense<MatrixType>, VectorVertical<MatrixType>, bool>
@@ -1282,7 +1282,7 @@ namespace P2SFM
 			std::tie(inliers, fundamentalMat) = AlgebraHelpers::RansacEstimate(coeffs, confidence, max_iterations, distance_threshold);
 
 
-			//do we have enough inliers (options.min_common_init)
+			//do we have enough inlier_points (options.min_common_init)
 			if (inliers.rows() < options.min_common_init)
 			{
 				std::cout << std::endl << "EstimateFundamentalMat: not enough inliers found" << std::endl;
@@ -1321,12 +1321,13 @@ namespace P2SFM
 
 
 
-	template <typename MatrixType>
+	template <typename MatrixType, typename IndexType>
 	struct InitialSolveOutput
 	{
 		MatrixDynamicDense<MatrixType> cameras;
 		MatrixDynamicDense<MatrixType> points;
-		MatrixDynamicDense<int> fixed;
+		//MatrixDynamicDense<int> fixed;
+		MatrixColSparse<int, IndexType> fixed;
 		Vector<int> pathway;
 	};
 
@@ -1344,7 +1345,7 @@ namespace P2SFM
 		* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points (1 x 2 + K)
 	*/
 	template <typename MatrixType, typename IndexType>
-	InitialSolveOutput<MatrixType> ComputeCamPts(
+	InitialSolveOutput<MatrixType, IndexType> ComputeCamPts(
 		const MatrixColSparse<MatrixType, IndexType>& norm_meas,
 		const Vector<int>& initial_points,
 		const MatrixDynamicDense<MatrixType>& fundamental_mat,
@@ -1384,18 +1385,31 @@ namespace P2SFM
 		// intial views are added to initial points between element 0-1 and 1-2
 		pathway << initial_points(0), -initial_views(0), initial_points(1), -initial_views(1), initial_points.block(0, 2, 1, initial_points.cols() - 2);//rest of initial_points
 
-		MatrixDynamicDense<int> fixed( 2, initial_points.size() + 2);
-		fixed.setZero();
-		fixed.coeffRef(0, 0) = initial_views(0);
-		fixed.coeffRef(0, 1) = initial_points(0);
-		fixed.coeffRef(0, 2) = initial_views(0);
+		MatrixColSparse<int, IndexType> fixed(2, initial_points.size() + 2);
+		std::vector<Eigen::Triplet<int, IndexType>> triplets;
 
-		fixed.coeffRef(0, 3) = initial_points(0);
-		fixed.coeffRef(1, 3) = initial_points(1);
+		triplets.push_back(Eigen::Triplet<int, IndexType>(0, 0, initial_views(0)));
+		triplets.push_back(Eigen::Triplet<int, IndexType>(0, 1, initial_points(0)));
+		triplets.push_back(Eigen::Triplet<int, IndexType>(0, 2, initial_views(0)));
+		triplets.push_back(Eigen::Triplet<int, IndexType>(0, 3, initial_points(0)));
+		triplets.push_back(Eigen::Triplet<int, IndexType>(1, 3, initial_points(1)));
+
+		//fixed.coeffRef(0, 0) = initial_views(0);
+		//fixed.coeffRef(0, 1) = initial_points(0);
+		//fixed.coeffRef(0, 2) = initial_views(0);
+
+		//fixed.coeffRef(0, 3) = initial_points(0);
+		//fixed.coeffRef(1, 3) = initial_points(1);
 		for (size_t i = 4; i < fixed.cols(); i++)
 		{
-			fixed.col(i) = initial_views;
+			//fixed.col(i) = initial_views;
+			triplets.push_back(Eigen::Triplet<int, IndexType>(0, i, initial_views(0)));
+			triplets.push_back(Eigen::Triplet<int, IndexType>(1, i, initial_views(1)));
 		}
+
+		fixed.reserve(triplets.size());
+		fixed.setFromTriplets(triplets.begin(), triplets.end());
+
 
 		//get full rows first/second view with all cols in initial points
 		MatrixDynamicDense<MatrixType> scaled_meas(6, initial_points.size());;
@@ -1434,7 +1448,7 @@ namespace P2SFM
 
 		MatrixDynamicDense<MatrixType> points = singularDiag * svdScaled.matrixV().block(0, 0, svdScaled.matrixV().rows(), 4).transpose();
 
-		//points has the last 2 rows flipped due to transposition ( as opposed to cols)
+		//points has the last 2 rows flipped due to transposition ( as opposed to cols earlier)
 		points.row(2) *= -1;
 		points.row(3) *= -1;
 
@@ -1461,7 +1475,7 @@ namespace P2SFM
 		* succes: whether or not valid results could be returned 
 	*/
 	template <typename MatrixType, typename IndexType>
-	std::tuple<InitialSolveOutput<MatrixType>, bool>
+	std::tuple<InitialSolveOutput<MatrixType, IndexType>, bool>
 	Initialisation(
 		const MatrixColSparse<MatrixType, IndexType>& norm_meas,
 		const MatrixDynamicDense<bool>& visibility, 
@@ -1474,7 +1488,8 @@ namespace P2SFM
 
 		//variables for retun value compute_cam_pts
 		MatrixDynamicDense< MatrixType> cameras, points;
-		MatrixDynamicDense< int> fixed;
+		//MatrixDynamicDense< int> fixed;
+		MatrixColSparse<int, IndexType> fixed;
 		Vector<int> pathway;
 
 		//find matches in view_pairs and estimated_views
@@ -1514,10 +1529,10 @@ namespace P2SFM
 				//only need to be succesfull once?
 				if (succesfulEstimation)
 				{
-					//get inliers of visible points
+					//get inlier_points of visible points
 					auto visiblePoints = visibility.row(firstViewRow) && visibility.row(secondViewRow);
 
-					//get the id of all rows that are both in visible points that are also present in inliers inliers
+					//get the id of all rows that are both in visible points that are also present in inlier_points inlier_points
 					Vector<int> init_points((inliers.array() != 0).count());
 
 					int count = 0, newId = 0;
@@ -1534,8 +1549,7 @@ namespace P2SFM
 						}
 					}
 
-					//std::tie(cameras, points, fixed, pathway) = ComputeCamPts(norm_meas, init_points, fundMat, Eigen::Vector2i(firstViewRow, secondViewRow));
-					//return {  cameras,points,fixed, pathway , true };
+					//return tuple + bool indiciating succes
 					return { ComputeCamPts(norm_meas, init_points, fundMat, Eigen::Vector2i(firstViewRow, secondViewRow)) , true };
 				}
 			}
@@ -1549,8 +1563,8 @@ namespace P2SFM
 	}
 
 	template <typename MatrixType, typename IndexType>
-	bool CheckExpandInit(
-		InitialSolveOutput<MatrixType>& cam_point_locations,
+	std::tuple<bool,int> CheckExpandInit(
+		InitialSolveOutput<MatrixType, IndexType>& cam_point_locations,
 		MatrixColSparse<MatrixType, IndexType>& inliers,
 		const int num_views,
 		const int num_points)
@@ -1562,7 +1576,7 @@ namespace P2SFM
 		if (cam_point_locations.pathway.size() != cam_point_locations.fixed.cols())
 		{
 			std::cout << "Initial pathway and fixed constraints should have the same lengths" << std::endl;
-			return false;
+			return { false,0 };
 		}
 
 		if (cam_point_locations.cameras.rows() != 3 * num_views)
@@ -1570,16 +1584,16 @@ namespace P2SFM
 			MatrixDynamicDense<MatrixType> newCameras(3*num_views,4);
 			newCameras.setZero();
 
-			//pathway(1) is element -initial_views(0) back in EstimateFunMat()
+			//pathway(1)(second element) is element -initial_views(0) back in EstimateFunMat()
 			for (size_t i = 0 ; i < 3; i++)
 			{
-				newCameras.row((-3 * cam_point_locations.pathway(1)) +i + 1) = cam_point_locations.cameras.row(i);
+				newCameras.row((-3 * cam_point_locations.pathway(1)) +i) = cam_point_locations.cameras.row(i);
 			}
 
-			//pathway(3) is element -initial_views(0) back in EstimateFunMat()
+			//pathway(3)(4th element) is element -initial_views(0) back in EstimateFunMat()
 			for (size_t i = 0; i < 3; i++)
 			{
-				newCameras.row((-3 * cam_point_locations.pathway(3)) + i + 1) = cam_point_locations.cameras.row(i  +3);
+				newCameras.row((-3 * cam_point_locations.pathway(3)) + i ) = cam_point_locations.cameras.row(i  +3);
 			}
 
 			cam_point_locations.cameras.resize(3 * num_views, 4);	//can only resize afterwards to prevent being destructive
@@ -1609,8 +1623,8 @@ namespace P2SFM
 		}
 
 
-		//2 negative initial_views values + inliers needs to be empty still
-		//fill inliers sparse matrix with values
+		//2 negative initial_views values + inlier_points needs to be empty still
+		//fill inlier_points sparse matrix with values
 		if (inliers.nonZeros() == 0 && (cam_point_locations.pathway.array() < 0).count() == 2)
 		{
 			std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
@@ -1641,10 +1655,9 @@ namespace P2SFM
 		cam_point_locations.pathway.block(0, last_path, 1, num_views + num_points - last_path).setZero();
 
 		//resize fixed in a similar manner
-		cam_point_locations.fixed.conservativeResize(2,num_views+num_points);
-		cam_point_locations.fixed.block(0, last_path, 2, num_views + num_points - last_path).setZero();
+		cam_point_locations.fixed.conservativeResize(2,num_views+num_points);	//setzero is unnecasy here
 
-		return true;
+		return { true,last_path };
 	}
 
 	/*
@@ -1653,7 +1666,7 @@ namespace P2SFM
 	  This diagnosis can also be saved to a file which can be reloaded later by calling this functions with only the filename.
 
 	  Input:
-		* inliers : Inliers matrix binary mask(FxN)
+		* inlier_points : Inliers matrix binary mask(FxN)
 		* visible : Visibility matrix binary mask(FxN)
 		* InitialSolveOutput init_output:
 			* cameras : Projective estimation of the cameras that has been completed(3Fx4)
@@ -1669,7 +1682,7 @@ namespace P2SFM
 	void Diagnosis(
 		const MatrixColSparse<MatrixType, IndexType>& inliers,
 		const MatrixDynamicDense<bool>& visibility,
-		const InitialSolveOutput<MatrixType>& init_output,
+		const InitialSolveOutput<MatrixType, IndexType>& init_output,
 		const MatrixColSparse<MatrixType, IndexType>& normalisations,
 		const MatrixColSparse<MatrixType, IndexType>& img_meas,
 		const MatrixDynamicDense<MatrixType>& centers,
@@ -1779,7 +1792,6 @@ namespace P2SFM
 			}
 		}
 
-
 		bool found = false;
 		for (size_t i = 0; i < r.cols(); i++)
 		{
@@ -1884,7 +1896,7 @@ namespace P2SFM
 
 		auto reproj_error = ComputeReprojection(estimation, points, points_id, view_id, normalisations, img_meas);
 
-		//get all inliers in reproj_error
+		//get all inlier_points in reproj_error
 
 		double score = 0.0;
 		for (size_t i = 0; i < inliers.size(); i++)
@@ -1930,15 +1942,16 @@ namespace P2SFM
 			}
 		}
 
+		//TODO: IMPLEMENT
 		//last condition/input argument
 		//if nargin > 7 && sort_inliers
-		//	[~, idx] = sort(reproj_errs(inliers));
-		//inliers = inliers(idx);
+		//	[~, idx] = sort(reproj_errs(inlier_points));
+		//inlier_points = inlier_points(idx);
 		//end
 
 		score += (known_points.size() - inliers.size())*threshold;
 
-		//return reproj_errors_sub/score/inliers
+		//return reproj_errors_sub/score/inlier_points
 		return { reproj_errors_sub, inliers,score };
 	}
 
@@ -1950,7 +1963,7 @@ namespace P2SFM
 		* pinv_meas : Matrix containing the data for elimination of projective depths,
 		                 cross - product matrix or pseudo - inverse of the of the normalized homogeneous coordinates(Fx3N)
 		* points : Projective points estimation(3Fx4)
-		* known_points : Indexes of the currently estimated points ordered such that ones already tested are first
+		* points_id : Indexes of the currently estimated points ordered such that ones already tested are first
 		* new_view : Index of the view to estimate
 		* num_rejected : Number of points that have already been tested
 		* normalisations : Normalisation transformation for each camera stacked vertically(3Fx3)
@@ -1961,11 +1974,11 @@ namespace P2SFM
 	    * best_estim : Best projective estimation of the view if one has been found
 	    * best_inliers : Inliers set of the best estimation found*/
 	template <typename MatrixType, typename IndexType>
-	void EstimateViewRobust(
+	std::tuple<VectorVertical<MatrixType>, Vector<int>> EstimateViewRobust(
 		const MatrixColSparse<MatrixType, IndexType>& data,
 		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
 		const MatrixDynamicDense<MatrixType>& points,
-		const Vector<int>& known_points,
+		const Vector<int>& points_id,
 		const int new_view,
 		const Vector<int>& rejected_views,
 		const MatrixColSparse<MatrixType, IndexType>& normalisations,
@@ -1975,79 +1988,80 @@ namespace P2SFM
 	{
 	
 		const int view_id = 3 * new_view;
-		const double log_conf = log(1 - options.confidence / 100);
+		const double log_conf = log(1.0 - options.confidence / 100.0);
 
-		int best_score = INT_MAX/7;	//generic big value
+		int best_score = INT_MAX/7;	//generic big value (*7 later)
+		VectorVertical<MatrixType> best_estim(0);
+		Vector<int> best_inliers(0);
 
-		int max_iter = options.max_iter_robust[1];
+		int last_iteration = options.max_iter_robust[1];
 
 		//main loop
-		for (size_t i = 0; i < max_iter; i++)
+		for (size_t i = 0; i < last_iteration; i++)
 		{
-			auto test_set = AlgebraHelpers::RandomSubset(known_points, 0/*rejected_views*/, options.minimal_view[level]);
+			//TODO: FIGURE THIS OUT
+			auto test_set = AlgebraHelpers::RandomSubset(points_id, 0/*rejected_views*/, options.minimal_view[level]);
 
-			//get test_set indices from known_points
+			//get test_set indices from points_id
 			//test_set is not used after this point so can be reused
 			for (size_t j = 0; j < test_set.size(); j++)
 			{
-				test_set(j) = known_points(test_set(j));
+				test_set(j) = points_id(test_set(j));
 			}
 
-
+			//TODO: REMOVE LATER
 			test_set << 186, 250, 244, 214, 174, 225, 171, 198, 189;
 			std::cout << "TEST: SET" << std::endl << test_set << std::endl;
 
-
 			auto result_test_set = EstimateView(data, pinv_meas, points, test_set, new_view, 5, options.rank_tolerance);	//6 -> 5 due to indexing
 		
-
 			if (std::get<0>(result_test_set).size() != 0 && (std::get<1>(result_test_set) * std::get<0>(result_test_set)).norm() / sqrt(std::get<1>(result_test_set).rows()) <= options.system_threshold)
 			{
 				Vector<MatrixType> reproj_errors;
 				double score;
 				Vector<int> inliers;
 
-
-				std::tie(reproj_errors,inliers,score) = FindInliers(std::get<0>(result_test_set), points, known_points, view_id, normalisations, img_meas, options.outlier_threshold);
-
+				std::tie(reproj_errors,inliers,score) = FindInliers(std::get<0>(result_test_set), points, points_id, view_id, normalisations, img_meas, options.outlier_threshold);
 
 				if (inliers.size() >= options.minimal_view[level] && score < 7 * best_score)	//7 int_max??
 				{
-					//get all inliers from known_points
+					//get all inlier_points from points_id
 					test_set.resize(inliers.size());
 					for (size_t j = 0; j < inliers.size(); j++)
 					{
-						test_set(j) = known_points(inliers(j));
+						test_set(j) = points_id(inliers(j));
 					}
 
-
 					auto result_final = EstimateView(data, pinv_meas, points, test_set, new_view, inliers.size()-1, options.rank_tolerance);
-				
-					//results vary too much
-					//std::cout << "ESTIMATION: " << std::endl << std::get<0>(result_final) << std::endl;
-					std::cout << "VAL: " << (std::get<1>(result_final) * std::get<0>(result_final)).norm() / sqrt(std::get<1>(result_final).rows()) 
-						<< " MATCH AGAINST: " << options.system_threshold << std::endl;
-
+								
 					if (std::get<0>(result_final).size() != 0 && (std::get<1>(result_final) * std::get<0>(result_final)).norm() / sqrt(std::get<1>(result_final).rows()) <= options.system_threshold)
 					{
-						double score =ComputeScore(std::get<0>(result_final), points, known_points, view_id, normalisations, img_meas, options.outlier_threshold, inliers);
+						double score =ComputeScore(std::get<0>(result_final), points, points_id, view_id, normalisations, img_meas, options.outlier_threshold, inliers);
 						
 						if (score < best_score)
 						{
 							best_score = score;
 							//save estimation, inleirs
+							best_estim.resize(std::get<0>(result_final).size());
+							best_estim = std::get<0>(result_final);
+
+							best_inliers.resize(inliers.size());
+							best_inliers = test_set;
+							//get all known points at indexes present in inlier_points
 
 							//adaptive maximum number of iterations
-							double ratio = inliers.size() / known_points.size();
+							double ratio = (double)inliers.size() / points_id.size();
+							double prob = std::max(min_diff_between_values, std::min(1.0-min_diff_between_values, 1 - pow(ratio,options.minimal_view[level])));
+							last_iteration = std::min(int(std::ceil(log_conf / log(prob))), options.max_iter_robust[1]);
 						}
 					
 					}
 
 				}
 			}
-
-			int x = 10;
 		}
+
+		return { best_estim,best_inliers };
 	}
 
 	//TODO:
@@ -2056,8 +2070,8 @@ namespace P2SFM
 	SearchEligibleViews(
 		const Eigen::Vector2i& thresholds,
 		const MatrixDynamicDense<bool>& visibility,
-		const Vector<int>& known_points,
-		const Vector<int>& known_views,
+		const Vector<int>& points_id,
+		const Vector<int>& views_id,
 		Vector<int>& rejected_views,
 		std::vector<PyramidalVisibilityScore>& pvs_scores)
 	{
@@ -2065,9 +2079,9 @@ namespace P2SFM
 
 		Vector<bool> unknown_views(num_views);
 		unknown_views.setOnes();	//which views do we not have info on right now??
-		for (size_t i = 0; i < known_views.size(); i++)	//should only be 2 elements but do this to be sure
+		for (size_t i = 0; i < views_id.size(); i++)	//should only be 2 elements but do this to be sure
 		{
-			unknown_views(known_views(i)) = false;
+			unknown_views(views_id(i)) = false;
 		}
 
 		//number of visible points per view, considering only 'known' points
@@ -2079,9 +2093,9 @@ namespace P2SFM
 			if (unknown_views(i) == true)
 			{
 				int count = 0;
-				for (size_t j = 0; j < known_points.size(); j++)
+				for (size_t j = 0; j < points_id.size(); j++)
 				{
-					if (visibility(i, known_points(j)) == true)
+					if (visibility(i, points_id(j)) == true)
 					{
 						count++;
 					}
@@ -2146,20 +2160,26 @@ namespace P2SFM
 		}
 	}
 
+	//rejected views is non-const
+	//does not just return a solveOutput, also modifies non-const parameters
 	template <typename MatrixType, typename IndexType>
-	void TryAddingViews(
+	std::tuple<InitialSolveOutput<MatrixType, IndexType>, int> TryAddingViews(
 		const MatrixColSparse<MatrixType, IndexType>& data,
-		const MatrixColSparse<MatrixType, IndexType>& pinv_meas, 
+		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
 		const MatrixDynamicDense<bool>& visibility,
 		const MatrixColSparse<MatrixType, IndexType>& normalisations,
 		const MatrixColSparse<MatrixType, IndexType>& img_meas,
-		const MatrixDynamicDense<MatrixType>& points,
-		const Vector<int>& known_points,	//all positive values in pathway
-		const Vector<int>& rejected_views,
+		const InitialSolveOutput<MatrixType, IndexType>& solveOutput,
+		const Vector<int>& points_id,	//all positive values in pathway
 		const Vector<int>& eligibles,
 		const int level,
+		Vector<int>& rejected_views,
+		MatrixColSparse<MatrixType, IndexType>& inliers,
+		int& last_path,
 		const Options& options = Options())
 	{
+		InitialSolveOutput<MatrixType, IndexType> output = solveOutput;
+
 		if (options.debuginform == Options::InformDebug::VERBOSE)
 		{
 			std::cout << " Trying to add " << eligibles.size() << " eligible(s) view(s) at level: " << level << std::endl;
@@ -2172,11 +2192,11 @@ namespace P2SFM
 			//get a list of indices alonst a certain row
 			Vector<int> visible_points(visibility.cols());
 			int count = 0;
-			for (size_t j = 0; j < known_points.size(); j++)
+			for (size_t j = 0; j < points_id.size(); j++)
 			{
-				if (visibility(eligibles(i), known_points(j)) == true)
+				if (visibility(eligibles(i), points_id(j)) == true)
 				{
-					visible_points(count) = known_points(j);
+					visible_points(count) = points_id(j);
 					count++;
 				}
 			}
@@ -2185,21 +2205,75 @@ namespace P2SFM
 			if (options.debuginform >= Options::InformDebug::REGULAR)
 			{
 				std::cout << "View: " << eligibles(i) << " (" << visible_points.block(0, 0, 1, count).size() <<
-					" visible points, rejected "  /*INSERT  rejected_views(eligibles(idx_view)) HERE*/ << ")" << std::endl;
+					" visible points, rejected "  /*TODO INSERT  rejected_views(eligibles(idx_view)) HERE*/ << ")" << std::endl;
 			}
 
+			VectorVertical<MatrixType> estim;
+			Vector<int>inlier_points;
 			if (options.robust_estimation)
 			{
-				//start with robust
-				EstimateViewRobust(data,pinv_meas,points,visible_points.block(0, 0, 1, count),eligibles(i),rejected_views,normalisations,img_meas,level,options);
-			
+				//care about both outputs
+				std::tie(estim,inlier_points) = EstimateViewRobust(data,pinv_meas, solveOutput.points,visible_points.block(0, 0, 1, count),eligibles(i),rejected_views,normalisations,img_meas,level,options);
 			}
 			else
 			{
-				std::cout << "NOT ROBUSt";
+				//care only about first of 4 outputs
+				estim = std::get<0>(EstimateView(data, pinv_meas, solveOutput.points, visible_points.block(0, 0, 1, count), eligibles(i), visible_points.size()));
+				inlier_points = visible_points;
+			}
 
+			if (estim.size() == 0)
+			{
+				if (options.debug >= Options::InformDebug::REGULAR)
+					std::cout << "rejected" << std::endl;
+
+				rejected_views(eligibles(i)) = visible_points.size();
+			}
+			else
+			{
+				if (options.debug >= Options::InformDebug::REGULAR)
+					std::cout << "added (" << inlier_points.size() << ") inliers" << std::endl;
+
+				num_added++;
+
+				for (size_t j = 0; j < 3; j++)
+				{
+					output.cameras.row(eligibles(i) * 3 + i) = estim.block(4*i, 0, 4, 1).transpose();
+
+				}
+
+				last_path++;
+
+
+				//IS THIS WORTHWHILE??
+				//inliers.makeCompressed();
+				//inliers.reserve(inlier_points.size());
+
+				if (output.fixed.rows() < inlier_points.size())
+				{
+					//output.fixed.makeCompressed();
+					output.fixed.conservativeResize(inlier_points.size(), output.fixed.cols()); //keeps elements 
+				}
+
+				//output.fixed.reserve(inlier_points.size());
+				for (size_t j = 0; j < inlier_points.size(); j++)
+				{
+					inliers.coeffRef(eligibles(i), inlier_points(j)) = 1;
+
+					//add values to correct column in output.fixed
+					output.fixed.coeffRef(j, last_path) = inlier_points(j);
+				}
+			
+				//pathway(last_path) = -eligibles(idx_view);
+				output.pathway(last_path) = -eligibles(i);
+
+
+				//rejected_views(eligibles(idx_view)) = 0;
+				rejected_views(eligibles(i)) = 0;
 			}
 		}
+
+		return { output,num_added };
 	}
 
 	/*
@@ -2229,7 +2303,7 @@ namespace P2SFM
 		* points : Projective estimation of the points that has been completed(4xN)
 		* pathway : Array containing the order in which views(negative) and points(positive) has been added(1 x k, k <= F + N)
 		* fixed : Cell containing arrays of the points or views used in the constraints when adding views and points(1 x F + N)
-		* inliers : Inliers matrix binary mask(FxN)
+		* inlier_points : Inliers matrix binary mask(FxN)
 	*/
 	template <typename MatrixType, typename IndexType>
 	void Complete(
@@ -2240,9 +2314,8 @@ namespace P2SFM
 		const MatrixColSparse<MatrixType, IndexType>& img_meas,
 		const MatrixDynamicDense<MatrixType>& img_sizes,
 		const MatrixDynamicDense<MatrixType>& centers,
-		InitialSolveOutput<MatrixType>& init_output,
-		const Options& options = Options()
-		)
+		InitialSolveOutput<MatrixType, IndexType>& init_output,
+		const Options& options = Options())
 	{
 		const int num_views = visibility.rows();
 		const int num_points = visibility.cols();
@@ -2251,7 +2324,14 @@ namespace P2SFM
 		MatrixColSparse<MatrixType, IndexType> inliers(num_views, num_points);
 		inliers.reserve((visibility.array() >0).count());
 
-		CheckExpandInit(init_output,inliers, num_views,num_points);
+		auto expand_result = CheckExpandInit(init_output,inliers, num_views,num_points);
+
+		int last_path = std::get<1>(expand_result) -1; //indexing
+		if (std::get<0>(expand_result) == true)
+		{
+			//TODO PROPER OUT/RETuRN??
+			std::cout << "Succesful Check ";
+		}
 
 		//variables used to limit refinement to latest added views/points
 		int init_refine = 0;
@@ -2339,7 +2419,9 @@ namespace P2SFM
 
 				if (eligibles.size() != 0)
 				{
-					TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output.points, copyPath,rejected_views, eligibles, level_views, options);
+					auto viewResult =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, copyPath, eligibles, level_views, rejected_views,inliers, last_path, options);
+					std::cout << "VIEWS ADDED: " << std::get<1>(viewResult) << std::endl;
+				
 				}
 			}
 		}
