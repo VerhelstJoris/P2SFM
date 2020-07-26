@@ -132,10 +132,74 @@ namespace P2SFM
 			}
 		}
 
+		//TODO:  restructure the following 2 functions to be less redundant
+		template <typename MatrixType>
+		MatrixDynamicDense<MatrixType> GetRowsDensematrix(const MatrixDynamicDense<MatrixType>& matrix,
+			const Vector<int>& rowIds)
+		{
+			MatrixDynamicDense<MatrixType> subMat(rowIds.size(), matrix.cols());
+
+			for (size_t i = 0; i < rowIds.size(); i++)
+			{
+				subMat.row(i) = matrix.row(rowIds(i));
+			}
+
+			return subMat;
+		}
+
+		template <typename MatrixType>
+		MatrixDynamicDense<MatrixType> GetColsDensematrix(const MatrixDynamicDense<MatrixType>& matrix,
+			const Vector<int>& colIds)
+		{
+			MatrixDynamicDense<MatrixType> subMat(matrix.rows(), colIds.size());
+
+			for (size_t i = 0; i < colIds.size(); i++)
+			{
+				subMat.col(i) = matrix.col(colIds(i));
+			}
+
+			return subMat;
+		}
+
+
+
+		//set all values in cols found in 'cols' to 0 for matrix
+		//no pruning here as this is a costly memory-wise and this operation might be performed twice in a row for both rows/cols
+		template <typename MatrixType, typename IndexType>
+		void SparseRemoveCols(MatrixColSparse<MatrixType, IndexType>& matrix, Vector<int> cols)
+		{
+			std::sort(cols.data(), cols.data() + cols.size());	
+
+			int count = 0;
+			for (int k = 0; k < matrix.outerSize(); ++k)	//skipping last element in cols
+			{
+				if (cols(count) == k && count < cols.size())
+				{
+					count = (count +1)%cols.size();	//clamp to max
+				}
+				else
+				{
+					for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(matrix, k); it; ++it)
+					{
+						it.valueRef() = (MatrixType)0;
+					}
+				}
+			}
+		}
+
+
 		enum ESTIMATION_METHOD
 		{
 			DEFAULT,
 			RANSAC
+		};
+
+		//type : Type of refinement(0 = local, 1 = global, 2 = final)
+		enum REFINEMENT_TYPE
+		{
+			LOCAL,
+			GLOBAL,
+			FINAL
 		};
 
 		template <typename MatrixType, typename IndexType>
@@ -1326,7 +1390,6 @@ namespace P2SFM
 	{
 		MatrixDynamicDense<MatrixType> cameras;
 		MatrixDynamicDense<MatrixType> points;
-		//MatrixDynamicDense<int> fixed;
 		MatrixColSparse<int, IndexType> fixed;
 		Vector<int> pathway;
 	};
@@ -2238,12 +2301,11 @@ namespace P2SFM
 
 				for (size_t j = 0; j < 3; j++)
 				{
-					output.cameras.row(eligibles(i) * 3 + i) = estim.block(4*i, 0, 4, 1).transpose();
+					output.cameras.row( eligibles(i) * 3  +j) = estim.block(4*j, 0, 4, 1).transpose();
 
 				}
 
 				last_path++;
-
 
 				//IS THIS WORTHWHILE??
 				//inliers.makeCompressed();
@@ -2275,6 +2337,220 @@ namespace P2SFM
 
 		return { output,num_added };
 	}
+
+	template <typename MatrixType, typename IndexType>
+	void EstimatePoint(
+		const MatrixColSparse<MatrixType, IndexType>& data,
+		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
+		const InitialSolveOutput<MatrixType, IndexType>& solveOutput,
+		const Vector<int>&  views_id,
+		const int new_point,
+		const int num_fixed = views_id.size(),
+		const double tol_rank = 1e-6 )
+	{
+
+	}
+
+	//points = reestimate_all_points(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_points);'
+	template <typename MatrixType, typename IndexType>
+	void ReEstimateAllPoints(const MatrixColSparse<MatrixType, IndexType>& data,
+		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
+		const MatrixColSparse<MatrixType, IndexType>& visible, 
+		const InitialSolveOutput<MatrixType, IndexType>& solveOutput,
+		const Vector<int>& points_id)
+	{
+		for (size_t i = 0; i < points_id.size(); i++)
+		{
+			int current_id = solveOutput.pathway(points_id(i));
+
+			//get col from solveOutput.fixed
+			int count = 0;
+			Vector<int> fixed_views(solveOutput.fixed.rows());
+			for (typename MatrixColSparse<int, IndexType>::InnerIterator it(solveOutput.fixed, points_id(i) ); it; ++it)
+			{
+				fixed_views(count) = it.value();
+				count++;
+			}
+
+			//get rowids visible for values that are also not alrady in fixed_views
+			Vector<int> visible_views(visible.rows());
+			int new_count = 0;
+			int id = 0;
+			for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(visible, current_id); it; ++it)
+			{
+				if (fixed_views(new_count) == it.row())
+				{
+					new_count = (new_count + 1) % fixed_views.size();
+				}
+				else
+				{
+					visible_views(id) = it.row();
+					id++;
+				}
+			}
+
+			//append visible_views to the back of fixed_views
+			Vector<int> combined(id+count);
+			combined << fixed_views.block(0,0,1,count), visible_views.block(0, 0, 1, id);
+
+			std::cout << "COMBINED VIEWS: " << combined;
+
+			//ESTIMATEPOINTS()
+			EstimatePoint(data, pinv_meas, solveOutput, combined, current_id, count);
+
+			if ()
+			{
+
+			}
+			else
+			{
+
+			}
+
+		}
+	}
+
+	/*Refines the reconstruction.
+	
+	  Input:
+		* data : Matrix containing the data to compute the cost function(2Fx3N)
+		* pinv_meas : Matrix containing the data for elimination of projective depths,
+		              cross - product matrix or pseudo - inverse of the of the normalized homogeneous coordinates(Fx3N)
+		* visible : Visibility matrix binary mask(FxN)
+		* solveOutput: struct containing
+			* cameras : Initial cameras estimation(3Fx4 or 3kx4 if k cameras in the initial sub - problem)
+			* points : Initial points estimation(4xN or 4xk if k points in the initial sub - problem)
+			* pathway : Array containing the order in which views(negative) and points(positive) has been added(1 x F + N)
+			* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points(1 x F + N)
+		* start_cameras : Binary value indicating if the refinement should start with cameras or points
+		* type : Type of refinement(0 = local, 1 = global, 2 = final)
+		* message : Message to display in information / verbose output
+	    * options : Structure containing options(must be initialized by ppsfm_options to contains all necessary fields)
+	Output :
+	    * cameras : Refined projective cameras estimation(3Fx4)
+		* points : Refined projective points estimation(4xN)*/
+	template <typename MatrixType, typename IndexType>
+	void Refinement(
+		const MatrixColSparse<MatrixType, IndexType>& data,
+		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
+		const MatrixColSparse<MatrixType, IndexType>& visible,
+		const InitialSolveOutput<MatrixType, IndexType>& solveOutput,
+		const int last_path,
+		const bool start_cameras,
+		const EigenHelpers::REFINEMENT_TYPE type,
+		const std::string& message,
+		const Options& options = Options())
+	{
+
+		int max_iterations = 0;
+		double min_change = 0.0;
+
+		switch (type)
+		{
+		case EigenHelpers::REFINEMENT_TYPE::LOCAL:
+			max_iterations = options.max_iter_refine;
+			min_change = options.min_change_local_refine;
+			break;
+		case EigenHelpers::REFINEMENT_TYPE::GLOBAL:
+			max_iterations = options.max_iter_refine;
+			min_change = options.min_change_global_refine;
+
+			break;
+		case EigenHelpers::REFINEMENT_TYPE::FINAL:
+			max_iterations = options.max_iter_final_refine;
+			min_change = options.min_change_final_refine;
+			break;
+		default:
+			break;
+		}
+
+
+		//get all values in pathway >0 and all id's of values <0
+		int point_amount = (solveOutput.pathway.array() > 0).count();
+		int cam_amount = (solveOutput.pathway.array() < 0).count();
+		int	count_point = 0, count_cam = 0;
+		Vector<int> known_points(point_amount);	//actual values stored
+		Vector<int> points_id(point_amount);		//TODO: REMOVE IF UNUSED?
+		Vector<int> camera_id(cam_amount);	//id's
+		Vector<int> known_cams(cam_amount);	//id's	//TODO: REMOVE IF UNUSED
+
+		//end at last path
+		for (size_t i = 0; (i <= last_path || (count_point < point_amount && count_cam < cam_amount)); i++)
+		{
+			if (solveOutput.pathway(i) > 0)
+			{
+				known_points(count_point) = solveOutput.pathway(i);
+				points_id(count_point) = i;
+				count_point++;
+			}
+			else if (solveOutput.pathway(i) < 0) //camera_id
+			{
+				camera_id(count_cam) = i;
+				known_cams(count_cam) = solveOutput.pathway(i);
+				count_cam++;
+			}
+		}
+
+		//MATLAB: known_cams3 = kron(-3 * pathway(idx_cameras), [1 1 1]) - kron(ones(1, length(idx_cameras)), [2 1 0]);
+		//kronecker tensor product:
+		//A[x1 y1]		B[a1 b1]	-------\	[x1*a1 x1*b1  y1*a1 y1*b1]
+		// [x2 y2]		 [a2 b2]    -------/	[x1*a2 x1*b2  y1*a2 y1*b2]
+		//										[x2*a1 x2*b1  y2*a1 y2*b1]
+		//										[x2*a2 x2*b2  y2*a2 y2*b2]
+		//there is no supported kronecker tensor product in the current version of Eigen, however the small(and known) matrices with which the 
+		//operations would be performed here allow us to work around it
+
+		Vector<int> known_cams3(known_cams.size() * 3);
+
+		for (size_t i = 0; i < known_cams.size(); i++)
+		{
+			size_t kron_id = i * 3;
+			known_cams3(kron_id)	 = -3 * (known_cams(i));
+			known_cams3(kron_id + 1) = -3 * (known_cams(i)) + 1;
+			known_cams3(kron_id + 2) = -3 * (known_cams(i)) + 2;
+		}
+		std::cout << known_cams3 << std::endl;
+		std::cout << known_cams << std::endl;
+
+
+
+
+		MatrixColSparse<MatrixType, IndexType> vis_copy(visible);
+		//	visible(:, setdiff(1:size(visible,2),pathway(idx_points))) = false;
+		//if the col is not present in known_points -> set val to 0/remove
+		EigenHelpers::SparseRemoveCols(vis_copy, known_points);
+
+
+		MatrixColSparse<MatrixType, IndexType> vis_temp = vis_copy.transpose();	//remove rows with cam id
+		EigenHelpers::SparseRemoveCols(vis_temp, known_cams * -1);
+		vis_copy = vis_temp.transpose();	//transpose back to regular
+		vis_copy.prune(MatrixType(0));
+
+
+		//main loop
+		for (size_t i = 0; i < max_iterations; i++)
+		{
+
+			MatrixDynamicDense<MatrixType> old_cameras = EigenHelpers::GetRowsDensematrix(solveOutput.cameras, known_cams3);
+			MatrixDynamicDense<MatrixType> old_points  = EigenHelpers::GetColsDensematrix(solveOutput.points, known_points);
+
+			if (start_cameras)
+			{
+				//cameras = reestimate_all_views(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_cameras);
+				//points = reestimate_all_points(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_points);
+			}
+			else
+			{
+				std::cout << "START WITH POINTS" << std::endl;
+				ReEstimateAllPoints(data, pinv_meas, vis_copy, solveOutput, points_id);
+				//points = reestimate_all_points(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_points);
+				//cameras = reestimate_all_views(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_cameras);
+			}
+			int x = 10;
+		}
+	
+	}
+
 
 	/*
 	   Complete the initial factorization provided in cameras and points under the constraint
@@ -2320,7 +2596,7 @@ namespace P2SFM
 		const int num_views = visibility.rows();
 		const int num_points = visibility.cols();
 
-		//allocate space for a sparse amt
+		//allocate space for a sparse mat
 		MatrixColSparse<MatrixType, IndexType> inliers(num_views, num_points);
 		inliers.reserve((visibility.array() >0).count());
 
@@ -2414,14 +2690,25 @@ namespace P2SFM
 				//search_eligible_views
 				Vector<int> eligibles;
 				Vector<double> scores;
-				std::tie(scores,eligibles)= SearchEligibleViews(options.eligibility_view.col(level_views), visibility, copyPath, Eigen::Vector2i(-init_output.pathway(1),-init_output.pathway(3)), rejected_views, pvs_scores);
-				int x = 10;
+				std::tie(scores,eligibles)= SearchEligibleViews(options.eligibility_view.col(level_views), visibility, copyPath,
+					Eigen::Vector2i(-init_output.pathway(1),-init_output.pathway(3)), rejected_views, pvs_scores);
 
 				if (eligibles.size() != 0)
 				{
-					auto viewResult =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, copyPath, eligibles, level_views, rejected_views,inliers, last_path, options);
+					auto viewResult =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, copyPath, eligibles,
+						level_views, rejected_views, inliers, last_path, options);
 					std::cout << "VIEWS ADDED: " << std::get<1>(viewResult) << std::endl;
 				
+					//InitialSolveOutput<MatrixType, IndexType> out_views_added = &std::get<0>(viewResult); //easier to refer to
+
+
+					if (std::get<1>(viewResult) > 0)
+					{
+						num_known_views += std::get<1>(viewResult);
+						level_points = std::max(1, level_points - 1);
+
+						Refinement(data, pinv_meas, inliers, std::get<0>(viewResult), last_path, false, EigenHelpers::REFINEMENT_TYPE::LOCAL, "", options);
+					}
 				}
 			}
 		}
