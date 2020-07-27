@@ -2574,7 +2574,8 @@ namespace P2SFM
 	    * cameras : Refined projective cameras estimation(3Fx4)
 		* points : Refined projective points estimation(4xN)*/
 	template <typename MatrixType, typename IndexType>
-	void Refinement(
+	InitialSolveOutput<MatrixType, IndexType>
+	Refinement(
 		const MatrixColSparse<MatrixType, IndexType>& data,
 		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
 		const MatrixColSparse<MatrixType, IndexType>& visible,
@@ -2667,8 +2668,11 @@ namespace P2SFM
 
 		InitialSolveOutput<MatrixType, IndexType> new_output = solveOutput;
 
+		double change_cam, change_points;
+
 		//main loop
-		for (size_t i = 0; i < max_iterations; i++)
+		size_t i = 0;
+		for (; i < max_iterations; i++)
 		{
 
 			MatrixDynamicDense<MatrixType> old_cameras = EigenHelpers::GetRowsDensematrix(new_output.cameras, known_cams3);
@@ -2676,21 +2680,41 @@ namespace P2SFM
 
 			if (start_cameras)
 			{
-				//cameras = reestimate_all_views(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_cameras);
-				//points = reestimate_all_points(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_points);
+				new_output.cameras = ReEstimateAllViews(data, pinv_meas, vis_copy, new_output, camera_id);
+				new_output.points = ReEstimateAllPoints(data, pinv_meas, vis_copy, new_output, points_id);
 			}
-			else
+			else //reversed order
 			{
-				std::cout << "START WITH POINTS" << std::endl;
 				new_output.points = ReEstimateAllPoints(data, pinv_meas, vis_copy, new_output, points_id);
 				new_output.cameras = ReEstimateAllViews(data, pinv_meas, vis_copy, new_output, camera_id);
-
-				//points = reestimate_all_points(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_points);
-				//cameras = reestimate_all_views(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_cameras);
 			}
-			int x = 10;
+
+			if (options.debuginform >= 1)
+			{
+				change_cam = (old_cameras - EigenHelpers::GetRowsDensematrix(new_output.cameras, known_cams3)).norm() / sqrt((old_cameras.array() > (MatrixType)0).count());
+				change_points = (old_cameras - EigenHelpers::GetColsDensematrix(new_output.points, known_points)).norm() / sqrt((old_points.array() > (MatrixType)0).count());
+			}
+
+			if (i+1 >= options.min_iter_refine )
+			{
+				break;
+			}
+
 		}
-	
+
+
+		if (options.debuginform >= 1)
+		{
+			std::cout << message << "'s refinement over " << i << " iterations";
+			if (options.debuginform == 2)
+			{
+				std::cout << " (norm changes: " << change_cam << " (cameras), " << change_points << "(points)";
+			}
+			std::cout << std::endl;
+		}
+
+
+		return new_output;
 	}
 
 
