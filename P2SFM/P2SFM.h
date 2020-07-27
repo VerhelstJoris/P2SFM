@@ -2444,7 +2444,7 @@ namespace P2SFM
 				count++;
 			}
 
-			//get rowids visible for values that are also not alrady in fixed_views
+			//get rowids visible for values that are also not alrady in fixed_points
 			Vector<int> visible_views(visible.rows());
 			int new_count = 0;
 			int id = 0;
@@ -2461,7 +2461,7 @@ namespace P2SFM
 				}
 			}
 
-			//append visible_views to the back of fixed_views
+			//append visible_views to the back of fixed_points
 			Vector<int> combined(id+count);
 			combined << fixed_views.block(0,0,1,count), visible_views.block(0, 0, 1, id);
 
@@ -2484,6 +2484,74 @@ namespace P2SFM
 		}
 
 		return points;
+	}
+
+	//very similar to reEstimePoints but different enough to make combining both into 1 a pain
+	template <typename MatrixType, typename IndexType>
+	MatrixDynamicDense<MatrixType> ReEstimateAllViews(const MatrixColSparse<MatrixType, IndexType>& data,
+		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
+		const MatrixColSparse<MatrixType, IndexType>& visible,
+		const InitialSolveOutput<MatrixType, IndexType>& solveOutput,
+		const Vector<int>& cameras_id)
+	{
+		MatrixDynamicDense<MatrixType> cameras(solveOutput.cameras);
+
+		for (size_t i = 0; i < cameras_id.size(); i++)
+		{
+			int current_id = -solveOutput.pathway(cameras_id(i));
+
+			//get col from solveOutput.fixed
+			int count = 0;
+			Vector<int> fixed_points(solveOutput.fixed.rows());
+			for (typename MatrixColSparse<int, IndexType>::InnerIterator it(solveOutput.fixed, cameras_id(i)); it; ++it)
+			{
+				fixed_points(count) = it.value();
+				count++;
+			}
+
+			//get rowids visible for values that are also not alrady in fixed_points
+			//transpose visible
+			MatrixColSparse<MatrixType, IndexType> vis_copy = visible.transpose();
+
+
+			Vector<int> visible_points(visible.cols());
+			int new_count = 0;
+			int id = 0;
+			for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(vis_copy, current_id); it; ++it)
+			{
+				if (fixed_points(new_count) == it.row())
+				{
+					new_count = (new_count + 1) % fixed_points.size();
+				}
+				else
+				{
+					visible_points(id) = it.row();
+					id++;
+				}
+			}
+
+			//append visible_views to the back of fixed_points
+			Vector<int> combined(id + count);
+			combined << fixed_points.block(0, 0, 1, count), visible_points.block(0, 0, 1, id);
+
+			//only care about the first ouput in this case
+			VectorVertical<MatrixType> estim = std::get<0>(EstimateView(data, pinv_meas, solveOutput.points, combined, current_id, count));
+
+			if (estim.size() == 0)
+			{
+				//			warning('Estimation of view %d is empty while doing refinement, leaving the point as is', idx);
+				std::cout << "Estimation of view " << current_id << " is empty while doing refinement, leaving the point as is" << std::endl;
+			}
+			else
+			{
+				cameras.row(3 * current_id) = estim.block(0, 0, 4, 1).transpose();
+				cameras.row(3 * current_id+1) = estim.block(4, 0, 4, 1).transpose();
+				cameras.row(3 * current_id+2) = estim.block(8, 0, 4, 1).transpose();
+			}
+
+		}
+
+		return cameras;
 	}
 
 	/*Refines the reconstruction.
@@ -2585,11 +2653,6 @@ namespace P2SFM
 			known_cams3(kron_id + 1) = -3 * (known_cams(i)) + 1;
 			known_cams3(kron_id + 2) = -3 * (known_cams(i)) + 2;
 		}
-		std::cout << known_cams3 << std::endl;
-		std::cout << known_cams << std::endl;
-
-
-
 
 		MatrixColSparse<MatrixType, IndexType> vis_copy(visible);
 		//	visible(:, setdiff(1:size(visible,2),pathway(idx_points))) = false;
@@ -2602,13 +2665,14 @@ namespace P2SFM
 		vis_copy = vis_temp.transpose();	//transpose back to regular
 		vis_copy.prune(MatrixType(0));
 
+		InitialSolveOutput<MatrixType, IndexType> new_output = solveOutput;
 
 		//main loop
 		for (size_t i = 0; i < max_iterations; i++)
 		{
 
-			MatrixDynamicDense<MatrixType> old_cameras = EigenHelpers::GetRowsDensematrix(solveOutput.cameras, known_cams3);
-			MatrixDynamicDense<MatrixType> old_points  = EigenHelpers::GetColsDensematrix(solveOutput.points, known_points);
+			MatrixDynamicDense<MatrixType> old_cameras = EigenHelpers::GetRowsDensematrix(new_output.cameras, known_cams3);
+			MatrixDynamicDense<MatrixType> old_points  = EigenHelpers::GetColsDensematrix(new_output.points, known_points);
 
 			if (start_cameras)
 			{
@@ -2618,7 +2682,9 @@ namespace P2SFM
 			else
 			{
 				std::cout << "START WITH POINTS" << std::endl;
-				ReEstimateAllPoints(data, pinv_meas, vis_copy, solveOutput, points_id);
+				new_output.points = ReEstimateAllPoints(data, pinv_meas, vis_copy, new_output, points_id);
+				new_output.cameras = ReEstimateAllViews(data, pinv_meas, vis_copy, new_output, camera_id);
+
 				//points = reestimate_all_points(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_points);
 				//cameras = reestimate_all_views(data, pinv_meas, visible, cameras, points, pathway, fixed, idx_cameras);
 			}
