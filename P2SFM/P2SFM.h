@@ -161,6 +161,55 @@ namespace P2SFM
 			return subMat;
 		}
 
+		template <typename MatrixType>
+		MatrixDynamicDense<MatrixType> GetRowsColsDensematrix(const MatrixDynamicDense<MatrixType>& matrix,
+			const Vector<int>& rowIds,
+			const Vector<int>& colIds)
+		{
+			MatrixDynamicDense<MatrixType> subMat(rowIds.size(), colIds.size());
+			int count_row = 0;
+			int count_col = 0;
+			
+			for (size_t i = 0; i < colIds.size(); i++)
+			{
+				count_row = 0;
+				for (size_t i = 0; i < rowIds.size(); i++)
+				{
+					subMat(count_row, count_col) = matrix(rowIds(count_row), colIds(count_col));
+					count_row++;
+				}
+				count_col++;
+			}
+
+			return subMat;
+		}
+
+		template <typename MatrixType>
+		MatrixDynamicDense<MatrixType> GetRowsColsDensematrix(
+			const MatrixDynamicDense<MatrixType>& matrix,
+			const Vector<int>& rowIds,	//id's 
+			const Vector<bool>& colIds)	//whether or not to consider this col
+		{
+  			MatrixDynamicDense<MatrixType> subMat(rowIds.size(), (colIds.array() > 0).count());
+			int count_col = 0;
+
+			for (size_t i = 0; i < colIds.size(); i++)
+			{
+				if (colIds(i) == 1)
+				{
+					for (size_t j = 0; j < rowIds.size(); j++)
+					{
+			
+						subMat(j, count_col) = matrix(rowIds(j), i);
+					}
+					count_col++;
+				}
+			}
+
+			return subMat;
+		}
+
+
 
 
 		//set all values in cols found in 'cols' to 0 for matrix
@@ -2235,6 +2284,61 @@ namespace P2SFM
 		}
 	}
 
+
+	//TODO:
+	//BETTER DESCRIPTION
+	Vector<int> SearchEligiblePoints(
+		const int eligibility_min,
+		const MatrixDynamicDense<bool>& visibility,
+		const Vector<int>& known_points,
+		const Vector<int>& known_views,
+		const Vector<int>& rejected_points )
+	{
+		int num_points = visibility.cols();
+
+		Vector<bool> unknown_points(num_points);
+		unknown_points.setOnes();
+		Vector<int> unknown_id(known_points.size());
+
+		//every value in known_points set to true
+		int count = 0;
+		for (size_t i = 0; i < known_points.size(); i++)
+		{
+			unknown_points(known_points(i)) = false;
+			unknown_id(count) = known_points(i);
+		}
+
+		Vector<int> eligible_points(num_points);	//max possible size
+
+
+		auto subMat = EigenHelpers::GetRowsColsDensematrix(visibility, known_views, unknown_points);
+
+		count = 0;
+		int second_count = 0;
+		for (size_t i = 0; i < num_points; i++)
+		{
+			if (unknown_points(i) == true)
+			{
+				int col_amount = (subMat.col(count).array() > 0).count();
+
+				if (col_amount > rejected_points(count) &&
+					col_amount >= eligibility_min)
+				{
+					eligible_points(second_count) = i;
+					second_count++;
+				}
+
+				count++;
+			}
+		}
+
+		eligible_points.conservativeResize(second_count);
+		return eligible_points;
+	}
+
+
+	//TODO:
+	//BETTER DESCRIPTION
 	//rejected views is non-const
 	//does not just return a solveOutput, also modifies non-const parameters
 	template <typename MatrixType, typename IndexType>
@@ -2615,9 +2719,9 @@ namespace P2SFM
 		int cam_amount = (solveOutput.pathway.array() < 0).count();
 		int	count_point = 0, count_cam = 0;
 		Vector<int> known_points(point_amount);	//actual values stored
-		Vector<int> points_id(point_amount);		//TODO: REMOVE IF UNUSED?
+		Vector<int> points_id(point_amount);		
 		Vector<int> camera_id(cam_amount);	//id's
-		Vector<int> known_cams(cam_amount);	//id's	//TODO: REMOVE IF UNUSED
+		Vector<int> known_cams(cam_amount);	//actual value
 
 		//end at last path
 		for (size_t i = 0; (i <= last_path || (count_point < point_amount && count_cam < cam_amount)); i++)
@@ -2692,7 +2796,7 @@ namespace P2SFM
 			if (options.debuginform >= 1)
 			{
 				change_cam = (old_cameras - EigenHelpers::GetRowsDensematrix(new_output.cameras, known_cams3)).norm() / sqrt((old_cameras.array() > (MatrixType)0).count());
-				change_points = (old_cameras - EigenHelpers::GetColsDensematrix(new_output.points, known_points)).norm() / sqrt((old_points.array() > (MatrixType)0).count());
+				change_points = (old_points - EigenHelpers::GetColsDensematrix(new_output.points, known_points)).norm() / sqrt((old_points.array() > (MatrixType)0).count());
 			}
 
 			if (i+1 >= options.min_iter_refine )
@@ -2795,7 +2899,27 @@ namespace P2SFM
 
 		//get all elements in pathway that are >0
 		Vector<int> copyPath((init_output.pathway.array() > 0).count());
-		copyPath << init_output.pathway(0), init_output.pathway(2), init_output.pathway.block(0, 4, 1, (init_output.pathway.array()>0).count() - 2);
+		Vector<int> camPath((init_output.pathway.array() < 0).count());
+
+		std::cout << (init_output.pathway.array() < 0).count();
+
+		//end at last path
+		int count_point = 0;
+		int count_cam = 0;
+		for (size_t i = 0; i < init_output.pathway.size(); i++)
+		{
+			if (init_output.pathway(i) > 0)
+			{
+				copyPath(count_point) = init_output.pathway(i);
+				count_point++;
+			}
+			if (init_output.pathway(i) < 0) //camera_id
+			{
+				camPath(count_cam) = -init_output.pathway(i);
+				count_cam++;
+			}
+		}
+
 
 		//create matrix for projs, massively oversized (create afterwards without having to retrieve all elements twice??)
 		MatrixDynamicDense<MatrixType> projs(2, copyPath.size()); //max possible size
@@ -2808,8 +2932,6 @@ namespace P2SFM
 			{
 				if (visibility(i, copyPath(j)) == 1)
 				{
-					//std::cout << img_meas.coeff(3 * i, copyPath(j)) << std::endl;
-					//std::cout << img_meas.coeff(3 * i + 1, copyPath(j)) << std::endl;
 					projs(0, counter) = img_meas.coeff(3 * i, copyPath(j));
 					projs(1, counter) = img_meas.coeff(3 * i + 1, copyPath(j));
 					counter++;
@@ -2857,26 +2979,61 @@ namespace P2SFM
 				Vector<int> eligibles;
 				Vector<double> scores;
 				std::tie(scores,eligibles)= SearchEligibleViews(options.eligibility_view.col(level_views), visibility, copyPath,
-					Eigen::Vector2i(-init_output.pathway(1),-init_output.pathway(3)), rejected_views, pvs_scores);
+					camPath, rejected_views, pvs_scores);
 
 				if (eligibles.size() != 0)
 				{
 					auto viewResult =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, copyPath, eligibles,
 						level_views, rejected_views, inliers, last_path, options);
-					std::cout << "VIEWS ADDED: " << std::get<1>(viewResult) << std::endl;
 				
-					//InitialSolveOutput<MatrixType, IndexType> out_views_added = &std::get<0>(viewResult); //easier to refer to
-
 
 					if (std::get<1>(viewResult) > 0)
 					{
 						num_known_views += std::get<1>(viewResult);
 						level_points = std::max(1, level_points - 1);
 
-						Refinement(data, pinv_meas, inliers, std::get<0>(viewResult), last_path, false, EigenHelpers::REFINEMENT_TYPE::LOCAL, "", options);
+						init_output = Refinement(data, pinv_meas, inliers, std::get<0>(viewResult), last_path, false, EigenHelpers::REFINEMENT_TYPE::LOCAL, "", options);
+						//diagnosis
+
+						if (!last_dir_change_view)	//towards points
+						{
+							prev_last_path(0) = last_path - num_added_views;
+							last_dir_change_view = true;
+							num_iter++;
+						}
 					}
 				}
+
+				if ( num_added_views==0 && level_views < options.max_level_views)
+				{
+					level_views++;
+					level_changed = true;
+				}
 			}
+
+			//move to a separate function??
+			copyPath.resize((init_output.pathway.array() > 0).count());
+			camPath.resize((init_output.pathway.array() < 0).count());
+
+			int count_point = 0;
+			int count_cam = 0;
+			for (size_t i = 0; i < init_output.pathway.size(); i++)
+			{
+				if (init_output.pathway(i) > 0)
+				{
+					copyPath(count_point) = init_output.pathway(i);
+					count_point++;
+				}
+				if (init_output.pathway(i) < 0) //camera_id
+				{
+					camPath(count_cam) = -init_output.pathway(i);
+					count_cam++;
+				}
+			}
+
+			//process points
+			SearchEligiblePoints(options.eligibility_point[level_points], visibility, copyPath, 
+				camPath, rejected_points);
 		}
 	}
 
