@@ -89,9 +89,8 @@ namespace P2SFM
 			return (Array<T>)map;
 		}
 
-		//TODO: restructure the following 2 functions to be less redundant
 		template <typename MatrixType, typename IndexType>
-		void GetSubMatSparse(const MatrixColSparse<MatrixType, IndexType>& matrix, 
+		void GetBlockSparse(const MatrixColSparse<MatrixType, IndexType>& matrix, 
 			MatrixDynamicDense<MatrixType>& subMat, const int rowId, const int colId)
 		{
 			subMat.setZero();
@@ -108,29 +107,76 @@ namespace P2SFM
 			}
 		}
 
-		//list of id's instead of starting id for col
+		
+		//does not account for duplicate rows
 		template <typename MatrixType, typename IndexType>
-		void GetSubMatSparse(const MatrixColSparse<MatrixType, IndexType>& matrix,
-			MatrixDynamicDense<MatrixType>& subMat, const int rowId, const Vector<int>& colIds)
+		void GetRowsColsSparse(const MatrixColSparse<MatrixType, IndexType>& matrix,
+			MatrixDynamicDense<MatrixType>& subMat, const Vector<int>& rowIds, const Vector<int>& colIds)
 		{
-			if (subMat.cols() != colIds.size())
+			//resize submat if needed
+			if (subMat.cols() != colIds.size() && subMat.rows() != rowIds.size())
 			{
-				subMat.resize(subMat.rows(), colIds.size());
+				subMat.resize(rowIds.size(), colIds.size());
 			}
 
-			subMat.setZero();
-
+			Vector<int> row_order(rowIds.size());
+			row_order.setZero();
+			bool first_col = true;
 			for (int k = 0; k < colIds.size(); ++k)
 			{
-				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(matrix, colIds(k) ); it; ++it)	//go look through next col in colids
+				int count = 0;
+				if (k == 1)
 				{
-					if (it.row() >= rowId && it.row() < rowId + subMat.rows())
+					first_col = false;
+				}
+
+				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(matrix, colIds(k)); it; ++it)	//go look through next col in colids
+				{
+					//this means that resulting matrix will have the elements in order despite of the order of rowids
+					if (( rowIds.array()==it.row() ).count() >=1)
 					{
-						subMat.coeffRef(it.row() - rowId, k) = it.value();
+						if (first_col)
+						{
+							Vector<int> result = (rowIds.array() == it.row()).cast<int>();	//find 1
+							row_order = row_order + (result * count);
+						}
+
+						subMat.coeffRef(count, k) = it.value();
+						count++;
 					}
 				}
 			}
+
+			//sort subMat rows based on rowIds
+			MatrixDynamicDense<MatrixType> copy(subMat);
+			for (size_t i = 0; i < row_order.size(); i++)
+			{
+				subMat.row(i) = copy.row(row_order(i));
+			}
 		}
+
+		//overload
+		template <typename MatrixType, typename IndexType>
+		void GetRowsColsSparse(const MatrixColSparse<MatrixType, IndexType>& matrix,
+			MatrixDynamicDense<MatrixType>& subMat, const Vector<int> rowIds, const int colId)
+		{
+			Vector<int> temp(1);
+			temp << colId;
+			return GetRowsColsSparse(matrix, subMat, rowIds, temp);
+		}
+
+		//overload
+		template <typename MatrixType, typename IndexType>
+		void GetRowsColsSparse(const MatrixColSparse<MatrixType, IndexType>& matrix,
+			MatrixDynamicDense<MatrixType>& subMat, const int rowId, const Vector<int> colIds)
+		{
+			Vector<int> temp(1);
+			temp << rowId;
+			return GetRowsColsSparse(matrix, subMat, rowId, colIds);
+		}
+
+
+
 
 		//TODO:  restructure the following 2 functions to be less redundant
 		template <typename MatrixType>
@@ -1976,28 +2022,67 @@ namespace P2SFM
 		}
 	}
 
+	template <typename MatrixType, typename IndexType>
+	std::tuple<Vector<MatrixType>, Vector<MatrixType>>
+		ComputeReprojectionPoint(
+			const VectorVertical<MatrixType>& estim,
+			const MatrixDynamicDense<MatrixType>& cameras,
+			const Vector<int>& views_id,
+			const int new_point,
+			const MatrixColSparse<MatrixType, IndexType>& img_meas)
+	{	
+		VectorVertical<MatrixType> scaled_measurements = cameras * estim;
 
+		VectorVertical<MatrixType> depths(scaled_measurements.rows() / 3);
+
+		for (size_t i = 0; i < depths.rows(); i++)	//every third row
+		{
+			depths(i) = scaled_measurements(3 * i + 2);
+		}
+
+		MatrixDynamicDense<MatrixType> reprojections(scaled_measurements);
+
+		for (size_t i = 0; i < reprojections.size(); i++)	//element wise division
+		{
+			reprojections(i) = reprojections(i) / depths(i/3);
+		}
+
+		MatrixDynamicDense<MatrixType> imgSub(views_id.size(), 1);	//all valid values so dense matrix
+		EigenHelpers::GetRowsColsSparse(img_meas, imgSub, views_id, new_point);
+
+
+		VectorVertical<MatrixType> reproj_error = reprojections - imgSub;
+
+		Vector<MatrixType> result(reproj_error.size()/3);
+		for (size_t i = 0; i < result.size(); i++)
+		{
+			result(i) = sqrt(pow(reproj_error(i * 3 ), 2) + pow(reproj_error(i * 3 + 1), 2));
+		}
+
+		return { result,depths };
+	}
 
 	template <typename MatrixType, typename IndexType>
 	std::tuple<Vector<MatrixType>, Vector<MatrixType>>
-		ComputeReprojection(
+		ComputeReprojectionView(
 			const VectorVertical<MatrixType>& estim,
 			const MatrixDynamicDense<MatrixType>& points,
 			const Vector<int>& points_id,
 			const int view_id,
 			const MatrixColSparse<MatrixType, IndexType>& normalisations,
 			const MatrixColSparse<MatrixType, IndexType>& img_meas)
-	{
+	{		
+
 		//Denormalize the estimes camera
 		MatrixDynamicDense<MatrixType> normMat(3, 3);
-		EigenHelpers::GetSubMatSparse(normalisations, normMat, view_id, view_id);
+		EigenHelpers::GetBlockSparse(normalisations, normMat, view_id, view_id);
 
 		MatrixDynamicDense<MatrixType> estimMat(3, 4);
 		estimMat << estim.block(0, 0, 4, 1).transpose(), estim.block(4, 0, 4, 1).transpose(), estim.block(8, 0, 4, 1).transpose();
 
-		MatrixDynamicDense<MatrixType> camera(3, 4);
-		camera = normMat.colPivHouseholderQr().solve(estimMat);
-
+		MatrixDynamicDense<MatrixType> camera = normMat.colPivHouseholderQr().solve(estimMat);
+		
+	
 		MatrixDynamicDense<MatrixType> known_points(4, points_id.size());
 
 		int count = 0;
@@ -2017,7 +2102,9 @@ namespace P2SFM
 		}
 
 		MatrixDynamicDense<MatrixType> imgSub(3, points_id.size());	//all valid values so dense matrix
-		EigenHelpers::GetSubMatSparse(img_meas, imgSub, view_id, points_id);
+		Vector<int> views_id(3);
+		views_id << view_id, view_id + 1, view_id + 2;
+		EigenHelpers::GetRowsColsSparse(img_meas, imgSub, views_id, points_id);
 
 		MatrixDynamicDense<MatrixType> reproj_error = reprojections - imgSub;
 
@@ -2037,17 +2124,18 @@ namespace P2SFM
 		const MatrixColSparse<MatrixType, IndexType>& normalisations,
 		const MatrixColSparse<MatrixType, IndexType>& img_meas,
 		const double threshold,
-		const Vector<int>& inliers)
+		const Vector<int>& inliers, 
+		const bool estim_view)
 	{
-
-		auto reproj_error = ComputeReprojection(estimation, points, points_id, view_id, normalisations, img_meas);
+		//TODO: CHANGE
+		auto reproj_error = ComputeReprojectionView(estimation, points, points_id, view_id, normalisations, img_meas);
 
 		//get all inlier_points in reproj_error
 
 		double score = 0.0;
 		for (size_t i = 0; i < inliers.size(); i++)
 		{
-			score += std::get<0>(reproj_error)(inliers(i));
+			score += (std::get<0>(reproj_error))(inliers(i));
 		}
 
 		score += ( points_id.size() - inliers.size()) *threshold;
@@ -2063,11 +2151,15 @@ namespace P2SFM
 			const int view_id,
 			const MatrixColSparse<MatrixType, IndexType>& normalisations,
 			const MatrixColSparse<MatrixType, IndexType>& img_meas,
-			const double threshold)
+			const double threshold,
+			const bool estim_view)
 	{
 
 		Vector<MatrixType> reproj_error, depths;
-		std::tie(reproj_error, depths) = ComputeReprojection(estim, points, known_points, view_id, normalisations, img_meas);
+
+		//COMPUTEREPROJ IS DIFFERENT
+		std::tie(reproj_error, depths) = estim_view ? ComputeReprojectionView(estim, points, known_points, view_id, normalisations, img_meas) :
+						ComputeReprojectionPoint(estim, points, known_points, view_id, img_meas);
 
 		//get id's of all reproj_error entries <= threshold
 		Vector<int> inliers((reproj_error.array() <= threshold).count());
@@ -2156,12 +2248,12 @@ namespace P2SFM
 			MatrixDynamicDense<MatrixType>dataMat(2, 3);
 			dataMat.setZero();
 
-			EigenHelpers::GetSubMatSparse(data, dataMat, new_view_id, point_id);
+			EigenHelpers::GetBlockSparse(data, dataMat, new_view_id, point_id);
 
 			sys.block(2 * i, 0, 2, sys.cols()) = dataMat * G;
 
 			MatrixDynamicDense<MatrixType>pinv_mat(1, 3);
-			EigenHelpers::GetSubMatSparse(pinv_meas, pinv_mat, new_view, point_id);
+			EigenHelpers::GetBlockSparse(pinv_meas, pinv_mat, new_view, point_id);
 			pos.row(i) = pinv_mat * G;
 
 			if (i < num_fixed)	//constraint on the first points
@@ -2222,17 +2314,19 @@ namespace P2SFM
 		MatrixDynamicDense<MatrixType> pos(num_views, 4); // positivity constraint (projective depths)
 		Vector<MatrixType> con(4); //Linear equality constraint (fixes sum of the fixed projective depths)
 
+		std::cout << views_id << std::endl << new_point << std::endl;
+
 		sys.setZero(); pos.setZero(); con.setZero();
 
 		for (size_t i = 0; i < num_views; i++)
 		{
 			int view_id = 3 * views_id(i);
 			MatrixDynamicDense<MatrixType> subMat(2, 3);
-			EigenHelpers::GetSubMatSparse(data, subMat, 2 * views_id(i), new_point_id);
+			EigenHelpers::GetBlockSparse(data, subMat, 2 * views_id(i), new_point_id);
 			sys.block(2 * i, 0, 2, sys.cols()) = subMat * cameras.block(view_id, 0, 3, cameras.cols());
 
 			MatrixDynamicDense<MatrixType> subMat2(1, 3);
-			EigenHelpers::GetSubMatSparse(pinv_meas, subMat2, views_id(i), new_point_id);
+			EigenHelpers::GetBlockSparse(pinv_meas, subMat2, views_id(i), new_point_id);
 			pos.row(i) = subMat2 * cameras.block(view_id, 0, 3, cameras.cols());
 
 			if (i < num_fixed)	//constraint on first point
@@ -2245,9 +2339,10 @@ namespace P2SFM
 		con = con / (num_fixed); //renormalize constraint
 
 		//Solve the LLS system imposing only the equality constraint
-		MatrixDynamicDense<MatrixType>A = sys.block(0, 1, sys.rows(), sys.cols() - 1) - sys.block(0, 0, sys.rows(), 1) * con.block(0, 1, 1, con.cols() - 1) / con(0);
+		MatrixDynamicDense<MatrixType>A = sys.block(0, 1, sys.rows(), sys.cols() - 1) - sys.col(0) * con.block(0, 1, 1, con.cols() - 1) / con(0);
 
 		VectorVertical<MatrixType>b = -sys.block(0, 0, sys.rows(), 1) / con(0);
+
 		return { SolveLLS(A,b,con,tol_rank),sys,con,pos };
 	}
 
@@ -2297,7 +2392,7 @@ namespace P2SFM
 			{
 				//denorm
 				MatrixDynamicDense<MatrixType> subMat(3, 3);
-				EigenHelpers::GetSubMatSparse(normalisations, subMat, 3 * points_id(i), 3 * points_id(i));
+				EigenHelpers::GetBlockSparse(normalisations, subMat, 3 * points_id(i), 3 * points_id(i));
 
 				denorm_cams.block(3 * i, 0, 3, 4) = subMat.colPivHouseholderQr().solve(solve_out.cameras.block(3 * points_id(i), 0, 3, solve_out.cameras.cols()));
 
@@ -2346,21 +2441,15 @@ namespace P2SFM
 			{
 				test_set.resize(3);
 				test_set << points_id(3), points_id(1), points_id(0);
-				std::cout << "TEST SET:" << std::endl << test_set << std::endl;
-
-				std::cout << "NEW VIEW: " << new_view << std::endl;
 
 				EstimatePoint(data, pinv_meas, solve_out.cameras, test_set, new_view, 1, options.rank_tolerance);
 			}
 
-			//REPLACE HERE
 			auto result_test_set = estim_views ? EstimateView(data, pinv_meas, solve_out.points, test_set, new_view, 5, options.rank_tolerance)://6 -> 5 due to indexing
-				//EstimatePoint(data,pinv_meas,solve_out.cameras,test_set,new_view,1,options.rank_tolerance);	//2->1
-				EstimateView(data, pinv_meas, solve_out.points, test_set, new_view, 5, options.rank_tolerance);
+				EstimatePoint(data, pinv_meas, solve_out.cameras, test_set, new_view, 1, options.rank_tolerance);	//2->1
 		
 			if (!estim_views)
 			{
-
 				std::cout << "ESTIM:" << std::endl << std::get<0>(result_test_set) << std::endl;
 
 				int x = 1;
@@ -2373,11 +2462,20 @@ namespace P2SFM
 				double score;
 				Vector<int> inliers;
 
-				//REPLACE
+				if (!estim_views)
+				{
+					int x = 1;
+				}
+
+				//ADAPT FINDINLIERS
 				std::tie(reproj_errors, inliers, score) = estim_views ?
-					FindInliers(std::get<0>(result_test_set), solve_out.points, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold) :
-					//FindInliers(std::get<0>(result_test_set), denorm_cams, views_id,new_view, normalisations,img_meas,options.outlier_threshold,false);
-					FindInliers(std::get<0>(result_test_set), solve_out.points, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold);
+					FindInliers(std::get<0>(result_test_set), solve_out.points, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold,true) :
+					FindInliers(std::get<0>(result_test_set), denorm_cams, views_id,new_view, normalisations,img_meas,options.outlier_threshold,false);
+
+				if (!estim_views)
+				{
+					int x = 1;
+				}
 
 
 				if (inliers.size() >= estim_views?options.minimal_view[level]:options.minimal_point[level] && score < 7 * best_score)	//7 int_max??
@@ -2396,8 +2494,8 @@ namespace P2SFM
 								
 					if (std::get<0>(result_final).size() != 0 && (std::get<1>(result_final) * std::get<0>(result_final)).norm() / sqrt(std::get<1>(result_final).rows()) <= options.system_threshold)
 					{
-						double score = estim_views?ComputeScore(std::get<0>(result_final), solve_out.points, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold, inliers):
-							ComputeScore(std::get<0>(result_final), denorm_cams, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold, inliers);
+						double score = estim_views?ComputeScore(std::get<0>(result_final), solve_out.points, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold, inliers,true):
+							ComputeScore(std::get<0>(result_final), denorm_cams, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold, inliers,false);
 						
 						if (score < best_score)
 						{
