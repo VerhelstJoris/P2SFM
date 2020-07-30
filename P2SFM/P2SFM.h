@@ -2127,8 +2127,25 @@ namespace P2SFM
 		const Vector<int>& inliers, 
 		const bool estim_view)
 	{
-		//TODO: CHANGE
-		auto reproj_error = ComputeReprojectionView(estimation, points, points_id, view_id, normalisations, img_meas);
+		
+		if (!estim_view)
+		{
+			std::cout << "ESTIM: " << estimation << std::endl;
+			std::cout << "POINTS: " << points << std::endl;
+			std::cout << "POINTS_ID: " << points_id << std::endl;
+			std::cout << "view_id: " << view_id << std::endl;
+			int x = 1;
+
+		}
+
+		auto reproj_error = estim_view ? ComputeReprojectionView(estimation, points, points_id, view_id, normalisations, img_meas) :
+			ComputeReprojectionPoint(estimation, points, points_id, view_id, img_meas);
+		
+		if (!estim_view)
+		{
+			int x = 1;
+		}
+
 
 		//get all inlier_points in reproj_error
 
@@ -2138,7 +2155,14 @@ namespace P2SFM
 			score += (std::get<0>(reproj_error))(inliers(i));
 		}
 
-		score += ( points_id.size() - inliers.size()) *threshold;
+		if (estim_view)
+		{
+			score += (points_id.size() - inliers.size()) *threshold;
+		}
+		else
+		{
+			score += (points_id.size()/3 - inliers.size()) *threshold;
+		}
 		return score;
 	}
 
@@ -2401,14 +2425,11 @@ namespace P2SFM
 				views_id(3 * i + 1) = 3 * points_id(i) + 1;
 				views_id(3 * i + 2) = 3 * points_id(i) + 2;
 			}
-
-			std::cout << std::endl << "VIEWS: " <<std::endl << views_id << std::endl;
 		}
 		else
 		{
 			views_id.resize(3);
 			views_id << 3 * new_view, 3 * new_view + 1, 3 * new_view + 2;
-
 		}
 
 		const double log_conf = log(1.0 - options.confidence / 100.0);
@@ -2422,11 +2443,10 @@ namespace P2SFM
 		//main loop
 		for (size_t i = 0; i < last_iteration; i++)
 		{
-			//TODO: FIGURE THIS OUT
 			auto test_set = AlgebraHelpers::RandomSubset(points_id, rejected_views,  estim_views?options.minimal_view[level]:options.minimal_point[level]);
 
 			//get test_set indices from points_id
-			//test_set is not used after this point so can be reused
+			//test_set is not used after this point so can be repurposed
 			for (size_t j = 0; j < test_set.size(); j++)
 			{
 				test_set(j) = points_id(test_set(j));
@@ -2440,20 +2460,13 @@ namespace P2SFM
 			else
 			{
 				test_set.resize(3);
-				test_set << points_id(3), points_id(1), points_id(0);
+				test_set << points_id(3), points_id(1), points_id(0);	//non-random 
 
 				EstimatePoint(data, pinv_meas, solve_out.cameras, test_set, new_view, 1, options.rank_tolerance);
 			}
 
 			auto result_test_set = estim_views ? EstimateView(data, pinv_meas, solve_out.points, test_set, new_view, 5, options.rank_tolerance)://6 -> 5 due to indexing
 				EstimatePoint(data, pinv_meas, solve_out.cameras, test_set, new_view, 1, options.rank_tolerance);	//2->1
-		
-			if (!estim_views)
-			{
-				std::cout << "ESTIM:" << std::endl << std::get<0>(result_test_set) << std::endl;
-
-				int x = 1;
-			}
 
 
 			if (std::get<0>(result_test_set).size() != 0 && (std::get<1>(result_test_set) * std::get<0>(result_test_set)).norm() / sqrt(std::get<1>(result_test_set).rows()) <= options.system_threshold)
@@ -2467,15 +2480,9 @@ namespace P2SFM
 					int x = 1;
 				}
 
-				//ADAPT FINDINLIERS
 				std::tie(reproj_errors, inliers, score) = estim_views ?
 					FindInliers(std::get<0>(result_test_set), solve_out.points, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold,true) :
 					FindInliers(std::get<0>(result_test_set), denorm_cams, views_id,new_view, normalisations,img_meas,options.outlier_threshold,false);
-
-				if (!estim_views)
-				{
-					int x = 1;
-				}
 
 
 				if (inliers.size() >= estim_views?options.minimal_view[level]:options.minimal_point[level] && score < 7 * best_score)	//7 int_max??
@@ -2487,16 +2494,26 @@ namespace P2SFM
 						test_set(j) = points_id(inliers(j));
 					}
 
-					//REPLACE HERE
 					auto result_final = estim_views ? EstimateView(data, pinv_meas, solve_out.points, test_set, new_view, inliers.size() - 1, options.rank_tolerance) :
-						//EstimatePoint(data,pinv_meas,solve_out.cameras, test_set,inliers.size()-1,options.rank_tolerance);
-						EstimateView(data, pinv_meas, solve_out.points, test_set, new_view, inliers.size() - 1, options.rank_tolerance);
-								
+						EstimatePoint(data,pinv_meas,solve_out.cameras, test_set,new_view,inliers.size(), options.rank_tolerance);
+		
 					if (std::get<0>(result_final).size() != 0 && (std::get<1>(result_final) * std::get<0>(result_final)).norm() / sqrt(std::get<1>(result_final).rows()) <= options.system_threshold)
 					{
+						Vector<int> ids(points_id.size() * 3);
+
+						if (!estim_views)	//find why this is necessary for points but not views
+						{
+							for (size_t i = 0; i < points_id.size(); i++)
+							{
+								ids(3*i)   = 3* points_id(i);
+								ids(3*i+1) = 3* points_id(i) + 1;
+								ids(3*i+2) = 3* points_id(i) + 2;
+							}
+						}
+
 						double score = estim_views?ComputeScore(std::get<0>(result_final), solve_out.points, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold, inliers,true):
-							ComputeScore(std::get<0>(result_final), denorm_cams, points_id, views_id(0), normalisations, img_meas, options.outlier_threshold, inliers,false);
-						
+							ComputeScore(std::get<0>(result_final), denorm_cams, ids, new_view, normalisations, img_meas, options.outlier_threshold, inliers,false);
+					
 						if (score < best_score)
 						{
 							best_score = score;
