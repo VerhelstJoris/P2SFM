@@ -90,7 +90,7 @@ namespace P2SFM
 		}
 
 		template <typename MatrixType, typename IndexType>
-		void GetBlockSparse(const MatrixColSparse<MatrixType, IndexType>& matrix, 
+		void GetDenseBlockSparse(const MatrixColSparse<MatrixType, IndexType>& matrix, 
 			MatrixDynamicDense<MatrixType>& subMat, const int rowId, const int colId)
 		{
 			subMat.setZero();
@@ -107,6 +107,27 @@ namespace P2SFM
 			}
 		}
 
+		//TODO: there has to be a cleaner way to get this
+		template <typename MatrixType, typename IndexType>
+		void GetSparseBlockSparse(const MatrixColSparse<MatrixType, IndexType>& matrix,
+			MatrixColSparse<MatrixType, IndexType>& subMat, const int rowId, const int colId)
+		{
+			std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
+
+			for (int k = colId; k < colId + subMat.cols(); ++k)
+			{
+				for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(matrix, k); it; ++it)
+				{
+					if (it.row() >= rowId && it.row() < rowId + subMat.rows())
+					{
+						tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(it.row()-rowId,it.col()-colId,it.value()));
+					}
+				}
+			}
+
+			subMat.setFromTriplets(tripletList.begin(), tripletList.end());
+
+		}
 		
 		//does not account for duplicate rows
 		template <typename MatrixType, typename IndexType>
@@ -192,7 +213,6 @@ namespace P2SFM
 
 			return ret;
 		}
-
 
 		//TODO:  restructure the following 2 functions to be less redundant
 		template <typename MatrixType>
@@ -484,7 +504,32 @@ namespace P2SFM
 
 			return retVec;
 		}
-	}
+	
+		std::tuple<Vector<int>,Vector<int>> GetPointsCamsPathway(const Vector<int>& pathway)
+		{
+			Vector<int> point_path((pathway.array() > 0).count());
+			Vector<int> cam_path((pathway.array()<0).count());
+
+			int count_point = 0;
+			int count_cam = 0;
+			for (size_t i = 0; i < pathway.size(); i++)
+			{
+				if (pathway(i) > 0)
+				{
+					point_path(count_point) = pathway(i);
+					count_point++;
+				}
+				if (pathway(i) < 0)
+				{
+					cam_path(count_cam) = -pathway(i);
+					count_cam++;
+				}
+			}
+
+			return { point_path,cam_path };
+
+		}
+}
 
 	namespace AlgebraHelpers
 	{
@@ -1890,7 +1935,7 @@ namespace P2SFM
 				//do not consider the 2 initial_views values
 				if (cam_point_locations.pathway(i) > 0)
 				{
-					tempPoints.col(cam_point_locations.pathway(i)) = cam_point_locations.points.col(count);	//issue here
+					tempPoints.col(cam_point_locations.pathway(i)) = cam_point_locations.points.col(count);	
 					count++;
 				}
 			}
@@ -2096,7 +2141,7 @@ namespace P2SFM
 
 		//Denormalize the estimes camera
 		MatrixDynamicDense<MatrixType> normMat(3, 3);
-		EigenHelpers::GetBlockSparse(normalisations, normMat, view_id, view_id);
+		EigenHelpers::GetDenseBlockSparse(normalisations, normMat, view_id, view_id);
 
 		MatrixDynamicDense<MatrixType> estimMat(3, 4);
 		estimMat << estim.block(0, 0, 4, 1).transpose(), estim.block(4, 0, 4, 1).transpose(), estim.block(8, 0, 4, 1).transpose();
@@ -2276,12 +2321,12 @@ namespace P2SFM
 			MatrixDynamicDense<MatrixType>dataMat(2, 3);
 			dataMat.setZero();
 
-			EigenHelpers::GetBlockSparse(data, dataMat, new_view_id, point_id);
+			EigenHelpers::GetDenseBlockSparse(data, dataMat, new_view_id, point_id);
 
 			sys.block(2 * i, 0, 2, sys.cols()) = dataMat * G;
 
 			MatrixDynamicDense<MatrixType>pinv_mat(1, 3);
-			EigenHelpers::GetBlockSparse(pinv_meas, pinv_mat, new_view, point_id);
+			EigenHelpers::GetDenseBlockSparse(pinv_meas, pinv_mat, new_view, point_id);
 			pos.row(i) = pinv_mat * G;
 
 			if (i < num_fixed)	//constraint on the first points
@@ -2338,24 +2383,21 @@ namespace P2SFM
 		MatrixDynamicDense<MatrixType> pos(num_views, 4); // positivity constraint (projective depths)
 		Vector<MatrixType> con(4); //Linear equality constraint (fixes sum of the fixed projective depths)
 
-		std::cout << points_id << std::endl << new_point << std::endl;
-
 		sys.setZero(); pos.setZero(); con.setZero();
 
 		for (size_t i = 0; i < num_views; i++)
 		{
 			int view_id = 3 * points_id(i);
 			MatrixDynamicDense<MatrixType> subMat(2, 3);
-			EigenHelpers::GetBlockSparse(data, subMat, 2 * points_id(i), new_point_id);
+			EigenHelpers::GetDenseBlockSparse(data, subMat, 2 * points_id(i), new_point_id);
 			sys.block(2 * i, 0, 2, sys.cols()) = subMat * cameras.block(view_id, 0, 3, cameras.cols());
 
 			MatrixDynamicDense<MatrixType> subMat2(1, 3);
-			EigenHelpers::GetBlockSparse(pinv_meas, subMat2, points_id(i), new_point_id);
+			EigenHelpers::GetDenseBlockSparse(pinv_meas, subMat2, points_id(i), new_point_id);
 			pos.row(i) = subMat2 * cameras.block(view_id, 0, 3, cameras.cols());
 
 			if (i < num_fixed)	//constraint on first point
 			{
-				std::cout << pos.row(i) << std::endl;
 				con = con + pos.row(i);
 			}
 		}
@@ -2417,7 +2459,7 @@ namespace P2SFM
 			{
 				//denorm
 				MatrixDynamicDense<MatrixType> subMat(3, 3);
-				EigenHelpers::GetBlockSparse(normalisations, subMat, 3 * entries_id(i), 3 * entries_id(i));
+				EigenHelpers::GetDenseBlockSparse(normalisations, subMat, 3 * entries_id(i), 3 * entries_id(i));
 
 				denorm_cams.block(3 * i, 0, 3, 4) = subMat.colPivHouseholderQr().solve(solve_out.cameras.block(3 * entries_id(i), 0, 3, solve_out.cameras.cols()));
 
@@ -2475,11 +2517,6 @@ namespace P2SFM
 				Vector<MatrixType> reproj_errors;
 				double score;
 				Vector<int> inliers;
-
-				if (!estim_views)
-				{
-					int x = 1;
-				}
 
 				std::tie(reproj_errors, inliers, score) = estim_views ?
 					FindInliers(std::get<0>(result_test_set), solve_out.points, entries_id, views_id(0), normalisations, img_meas, options.outlier_threshold,true) :
@@ -2555,6 +2592,11 @@ namespace P2SFM
 	{
 		const int num_views = visibility.rows();
 
+		if (points_id.size() == 139)
+		{
+			int x = 1;
+		}
+
 		Vector<bool> unknown_views(num_views);
 		unknown_views.setOnes();	//which views do we not have info on right now??
 		for (size_t i = 0; i < views_id.size(); i++)	//should only be 2 elements but do this to be sure
@@ -2599,7 +2641,7 @@ namespace P2SFM
 		std::vector<double> scores(num_views,0);
 		scores.reserve(num_views);
 		//Vector<double> scores(num_views);
-		MatrixDynamicDense<int> eligibles(1, num_views);
+		MatrixDynamicDense<int> eligibles(1, num_views); //classified as MatrixDynamicDense for use in function later
 		Vector<int> eligibles_compressed(1, num_views);
 		int count = 0;
 		for (int i = 0; i < pvs_scores.size(); i++)
@@ -2774,7 +2816,6 @@ namespace P2SFM
 
 				}
 
-				last_path++;
 
 				//IS THIS WORTHWHILE??
 				//inliers.makeCompressed();
@@ -2798,6 +2839,7 @@ namespace P2SFM
 				//pathway(last_path) = -eligibles(idx_view);
 				output.pathway(last_path) = -eligibles(i);
 
+				last_path++;	
 
 				//rejected_views(eligibles(idx_view)) = 0;
 				rejected_views(eligibles(i)) = 0;
@@ -2875,6 +2917,7 @@ namespace P2SFM
 				}
 
 
+
 				if (estimation.size() == 0)
 				{
 					if (options.debuginform >= Options::InformDebug::REGULAR)
@@ -2898,18 +2941,19 @@ namespace P2SFM
 					}
 					added(i) = true;
 
-					last_path++;
 					solveOutput.pathway(last_path) = eligibles(i);
+
 					//solveOutput.fixed.reserve(inlier_views.size());	
 
 					for (size_t i = 0; i < inlier_views.size(); i++)
 					{
+						//error at very first
 						solveOutput.fixed.insert(i, last_path) = inlier_views(i);
 					}
 
+					last_path++;
+
 					rejected_points(eligibles(i)) = 0;
-
-
 				}
 			}
 
@@ -3093,6 +3137,10 @@ namespace P2SFM
 		const std::string& message,
 		const Options& options = Options())
 	{
+		Vector<int> sub_path = solveOutput.pathway.block(0, first_path, 1, last_path - first_path);
+		MatrixColSparse<int, IndexType> sub_fixed(solveOutput.fixed.rows(), last_path - first_path);
+		EigenHelpers::GetSparseBlockSparse(solveOutput.fixed, sub_fixed, 0, first_path);
+
 
 		int max_iterations = 0;
 		double min_change = 0.0;
@@ -3118,41 +3166,28 @@ namespace P2SFM
 
 
 		//get all values in pathway >0 and all id's of values <0
-		int point_amount = (solveOutput.pathway.array() > 0).count();
-		int cam_amount =   (solveOutput.pathway.array() < 0).count();
+		int point_amount = (sub_path.array() > 0).count();
+		int cam_amount =   (sub_path.array() < 0).count();
 		int	count_point = 0, count_cam = 0;
 		Vector<int> known_points(point_amount);	//actual values stored
 		Vector<int> points_id(point_amount);		
 		Vector<int> camera_id(cam_amount);	//id's
-		Vector<int> known_cams(cam_amount);	//actual value
+ 		Vector<int> known_cams(cam_amount);	//actual value
 
-		//end at last path
-		if (first_path != 0)
+		for (size_t i = 0; (i < sub_path.size() || (count_point < point_amount && count_cam < cam_amount)); i++)
 		{
-			int x = 1;
-		}
-
-		for (size_t i = first_path; (i <= last_path || (count_point < point_amount && count_cam < cam_amount)); i++)
-		{
-			if (solveOutput.pathway(i) > 0)
+			if (sub_path(i) > 0)
 			{
-				known_points(count_point) = solveOutput.pathway(i);
+				known_points(count_point) = sub_path(i);
 				points_id(count_point) = i;
 				count_point++;
 			}
-			else if (solveOutput.pathway(i) < 0) //camera_id
+			else if (sub_path(i) < 0) //camera_id
 			{
 				camera_id(count_cam) = i;
-				known_cams(count_cam) = solveOutput.pathway(i);
+				known_cams(count_cam) = sub_path(i);
 				count_cam++;
 			}
-		}
-		std::cout << known_points << std::endl << known_cams << std::endl;
-
-
-		if (first_path != 0)
-		{
-			int x = 1;
 		}
 
 
@@ -3186,7 +3221,7 @@ namespace P2SFM
 		vis_copy = vis_transposed.transpose();	//transpose back to regular
 		vis_copy.prune(MatrixType(0));
 
-		InitialSolveOutput<MatrixType, IndexType> new_output = solveOutput;
+		InitialSolveOutput<MatrixType, IndexType> new_output = { solveOutput.cameras, solveOutput.points, sub_fixed, sub_path };
 
 		double change_cam, change_points;
 
@@ -3233,7 +3268,8 @@ namespace P2SFM
 			std::cout << std::endl;
 		}
 
-
+		new_output.pathway = solveOutput.pathway;
+		new_output.fixed = solveOutput.fixed;
 		return new_output;
 	}
 
@@ -3282,13 +3318,18 @@ namespace P2SFM
 		const int num_views = visibility.rows();
 		const int num_points = visibility.cols();
 
+
 		//allocate space for a sparse mat
 		MatrixColSparse<MatrixType, IndexType> inliers(num_views, num_points);
 		inliers.reserve((visibility.array() >0).count());
 
+
+
 		auto expand_result = CheckExpandInit(init_output,inliers, num_views,num_points);
 
-		int last_path = std::get<1>(expand_result) -1; //indexing
+
+
+		int last_path = std::get<1>(expand_result); //indexing
 		if (std::get<0>(expand_result) == true)
 		{
 			//TODO PROPER OUT/RETuRN??
@@ -3309,46 +3350,30 @@ namespace P2SFM
 		rejected_points.setZero();
 
 		//PVS for views
-		//old init_pvs function in ppsfm_complete
+		//old init_pvs function in ppsfm_complete here
 		std::vector<PyramidalVisibilityScore> pvs_scores(num_views);
 		MatrixColSparse<MatrixType, IndexType> copyMat(img_meas.transpose());
 
 		//get all elements in pathway that are >0
-		Vector<int> copyPath((init_output.pathway.array() > 0).count());
-		Vector<int> camPath((init_output.pathway.array() < 0).count());
+		Vector<int> point_path((init_output.pathway.array() > 0).count());
+		Vector<int> cam_path((init_output.pathway.array() < 0).count());
+		std::tie(point_path, cam_path) = EigenHelpers::GetPointsCamsPathway(init_output.pathway);
 
-		std::cout << (init_output.pathway.array() < 0).count();
-
-		int count_point = 0;
-		int count_cam = 0;
-		for (size_t i = 0; i < init_output.pathway.size(); i++)
-		{
-			if (init_output.pathway(i) > 0)
-			{
-				copyPath(count_point) = init_output.pathway(i);
-				count_point++;
-			}
-			if (init_output.pathway(i) < 0) //camera_id
-			{
-				camPath(count_cam) = -init_output.pathway(i);
-				count_cam++;
-			}
-		}
 
 
 		//create matrix for projs, massively oversized (create afterwards without having to retrieve all elements twice??)
-		MatrixDynamicDense<MatrixType> projs(2, copyPath.size()); //max possible size
+		MatrixDynamicDense<MatrixType> projs(2, point_path.size()); //max possible size
 
 		for (size_t i = 0; i < num_views; i++)
 		{
 
 			int counter=0;
-			for (size_t j = 0; j < copyPath.size(); j++)
+			for (size_t j = 0; j < point_path.size(); j++)
 			{
-				if (visibility(i, copyPath(j)) == 1)
+				if (visibility(i, point_path(j)) == 1)
 				{
-					projs(0, counter) = img_meas.coeff(3 * i, copyPath(j));
-					projs(1, counter) = img_meas.coeff(3 * i + 1, copyPath(j));
+					projs(0, counter) = img_meas.coeff(3 * i, point_path(j));
+					projs(1, counter) = img_meas.coeff(3 * i + 1, point_path(j));
 					counter++;
 				}
 			}
@@ -3370,12 +3395,13 @@ namespace P2SFM
 		int level_points = std::max(options.init_level_points, options.max_level_points);
 
 		//get amount of values in pathway <0
-		int num_known_views = (init_output.pathway.array() < 0).count();
-		int num_known_points = (init_output.pathway.array() > 0).count();	//>0 to avoid empty values appended at the end
+		int num_known_views  = (init_output.pathway.block(0, 0, 1, last_path).array() < 0).count();
+		int num_known_points = (init_output.pathway.block(0, 0, 1, last_path).array() > 0).count();	//>0 to avoid empty values appended at the end
 		int num_added_views = num_known_points, num_added_points = num_known_points;
 
 		int num_iter = 0;
 		int iter_refine = 0;
+		bool first_loop = true;
 
 		//ppsfm_diagnosis()
 
@@ -3387,28 +3413,50 @@ namespace P2SFM
 			num_added_points = 0;
 			num_added_views = 0;
 
-			//process views
+			if (first_loop)
+			{
+				first_loop = false;
+			}
+			else
+			{
+				std::tie(point_path, cam_path) = EigenHelpers::GetPointsCamsPathway(init_output.pathway);	//can be skipped if this is the first loop
+			}
+			//std::cout << point_path << std::endl;
+
+			//PROCESS VIEWS
+			//====================================================
+			std::cout << "VIEWS" << std::endl << "=========================================" << std::endl;
 			if (num_known_views < num_views)
 			{
 				//search_eligible_views
 				Vector<int> eligibles;
 				Vector<double> scores;
-				std::tie(scores,eligibles)= SearchEligibleViews(options.eligibility_view.col(level_views), visibility, copyPath,
-					camPath, rejected_views, pvs_scores);
+
+				//std::cout << "rejected_views:"  << rejected_views << std::endl;
+				//std::cout << "POINTS: " << std::endl << point_path << std::endl << point_path.size() << std::endl;
+				//std::cout << "CAMS: " << std::endl << cam_path << std::endl;
+				std::tie(scores, eligibles) = SearchEligibleViews(options.eligibility_view.col(level_views), visibility, point_path,
+					cam_path, rejected_views, pvs_scores);
+				std::cout << "ELIGIBLES: " << eligibles << std::endl;
+
 
 				if (eligibles.size() != 0)
 				{
-					auto viewResult =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, copyPath, eligibles,
+
+					auto viewResult =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, point_path, eligibles,
 						level_views, rejected_views, inliers, last_path, options);
 				
-
 					if (std::get<1>(viewResult) > 0)
 					{
 						num_known_views += std::get<1>(viewResult);
 						level_points = std::max(1, level_points - 1);
 
+
+
+						//pathway(init_refine:last_path), fixed(init_refine:last_path)
 						init_output = Refinement(data, pinv_meas, inliers, std::get<0>(viewResult), init_refine, last_path, false, EigenHelpers::REFINEMENT_TYPE::LOCAL, "", options);
 						//diagnosis
+
 
 						if (!last_dir_change_view)	//towards points
 						{
@@ -3428,40 +3476,31 @@ namespace P2SFM
 
 			//move to a separate function??
 			//pathway has changed so have to reset these vars
-			copyPath.resize((init_output.pathway.array() > 0).count());
-			camPath.resize((init_output.pathway.array() < 0).count());
+			point_path.resize((init_output.pathway.array() > 0).count());
+			cam_path.resize((init_output.pathway.array() < 0).count());
+			
+			std::tie(point_path,cam_path) = EigenHelpers::GetPointsCamsPathway(init_output.pathway);
 
-			int count_point = 0;
-			int count_cam = 0;
-			for (size_t i = 0; i < init_output.pathway.size(); i++)
-			{
-				if (init_output.pathway(i) > 0)
-				{
-					copyPath(count_point) = init_output.pathway(i);
-					count_point++;
-				}
-				if (init_output.pathway(i) < 0) //camera_id
-				{
-					camPath(count_cam) = -init_output.pathway(i);
-					count_cam++;
-				}
-			}
 
 			//PROCESS POINTS
-			Vector<int> eligible_points = SearchEligiblePoints(options.eligibility_point[level_points], visibility, copyPath, 
-				camPath, rejected_points);
-			
+			//============================================
+			Vector<int> eligible_points = SearchEligiblePoints(options.eligibility_point[level_points], visibility, point_path, 
+				cam_path, rejected_points);
+
+
 			if (eligible_points.size() != 0)
 			{
 				Vector<bool> added;
-				int num_added;
 
 				//also modifies last few variables passed by ref
-				std::tie(added, num_added) = TryAddingPoints(data, pinv_meas, visibility, normalisations, img_meas, copyPath, camPath,eligible_points,
+				//LAST PATH INCREMENT
+
+
+				std::tie(added, num_added_points) = TryAddingPoints(data, pinv_meas, visibility, normalisations, img_meas, point_path, cam_path,eligible_points,
 					level_views, rejected_points, init_output, inliers, last_path, options);
 
-
-				if (num_added > 0)
+				//good up to here
+				if (num_added_points > 0)
 				{
 					num_known_points += num_added_points;
 
@@ -3500,10 +3539,10 @@ namespace P2SFM
 						}
 					}
 
-
 					level_views = std::max(1, level_views - 1);
 	
 					//maybe replace with a temp??
+					//TODO :pathway(init_refine:last_path), fixed(init_refine:last_path)
 					init_output = Refinement(data, pinv_meas, inliers, init_output, init_refine, last_path, true, EigenHelpers::REFINEMENT_TYPE::LOCAL, "", options);
 
 					//diagnosis
@@ -3532,6 +3571,8 @@ namespace P2SFM
 
 			if (num_iter - iter_refine > options.global_refine)
 			{
+				//TODO
+				//pathway(1:last_path), fixed(1:last_path)
 				init_output = 
 					Refinement(data, pinv_meas, inliers, init_output, 0, last_path, false, EigenHelpers::REFINEMENT_TYPE::GLOBAL, " Global", options);
 			}
@@ -3553,11 +3594,10 @@ namespace P2SFM
 		}
 
 
-		std::cout << "FINALE: " << std::endl;
-		std::cout << init_output.pathway.block(0, 0, 1, last_path) << std::endl;
-		std::cout << init_output.fixed << std::endl;
-
-		int x = 1;
+		init_output.pathway = init_output.pathway.block(0, 0, 1, last_path);
+		MatrixColSparse<int, IndexType> sub_fixed(init_output.fixed.rows(), last_path );
+		EigenHelpers::GetSparseBlockSparse(init_output.fixed, sub_fixed, 0, 0);
+		init_output.fixed = sub_fixed;
 	}
 
 }
