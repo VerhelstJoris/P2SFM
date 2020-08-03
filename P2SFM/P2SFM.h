@@ -1225,7 +1225,7 @@ namespace P2SFM
 		int init_level_views = 0; // the initial level of eligibility thresholds for views
 		int max_level_views = 4; // the maximum level of eligibility thresholds for views
 		int eligibility_point[9] = { 10,9, 8,7, 6, 5, 4, 3, 2 }; // eligibility thresholds for points at each level
-		int init_level_points = 6; // the initial level of eligibility thresholds for points
+		int init_level_points = 5; // the initial level of eligibility thresholds for points
 		int max_level_points = 7; // the maximum level of eligibility thresholds for points
 		bool differ_last_level = false; // differ the last level of eligibility thresholds for points until last resort situation
 		int min_common_init = 200; // Number of minimum common projections for the initial pair
@@ -2592,11 +2592,6 @@ namespace P2SFM
 	{
 		const int num_views = visibility.rows();
 
-		if (points_id.size() == 139)
-		{
-			int x = 1;
-		}
-
 		Vector<bool> unknown_views(num_views);
 		unknown_views.setOnes();	//which views do we not have info on right now??
 		for (size_t i = 0; i < views_id.size(); i++)	//should only be 2 elements but do this to be sure
@@ -3432,29 +3427,29 @@ namespace P2SFM
 				Vector<int> eligibles;
 				Vector<double> scores;
 
-				//std::cout << "rejected_views:"  << rejected_views << std::endl;
-				//std::cout << "POINTS: " << std::endl << point_path << std::endl << point_path.size() << std::endl;
-				//std::cout << "CAMS: " << std::endl << cam_path << std::endl;
+				//num_added_views is not updated properly and therefore level_views is not either
 				std::tie(scores, eligibles) = SearchEligibleViews(options.eligibility_view.col(level_views), visibility, point_path,
 					cam_path, rejected_views, pvs_scores);
-				std::cout << "ELIGIBLES: " << eligibles << std::endl;
+				//std::cout << "ELIGIBLES: " << eligibles << std::endl;
+				//std::cout << "OPTIONS: " << options.eligibility_view.col(level_views) << std::endl << "level: " << level_views << std::endl;
 
 
 				if (eligibles.size() != 0)
 				{
 
-					auto viewResult =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, point_path, eligibles,
+					std::tie(init_output,num_added_views) =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, point_path, eligibles,
 						level_views, rejected_views, inliers, last_path, options);
-				
-					if (std::get<1>(viewResult) > 0)
+					//std::cout << "NUM ADDED: " << num_added_views << std::endl;
+
+					if (num_added_views > 0)
 					{
-						num_known_views += std::get<1>(viewResult);
+						num_known_views += num_added_views;
+						std::cout << "level points decrement" << std::endl;
 						level_points = std::max(1, level_points - 1);
 
 
-
 						//pathway(init_refine:last_path), fixed(init_refine:last_path)
-						init_output = Refinement(data, pinv_meas, inliers, std::get<0>(viewResult), init_refine, last_path, false, EigenHelpers::REFINEMENT_TYPE::LOCAL, "", options);
+						init_output = Refinement(data, pinv_meas, inliers, init_output, init_refine, last_path, false, EigenHelpers::REFINEMENT_TYPE::LOCAL, "local", options);
 						//diagnosis
 
 
@@ -3484,9 +3479,13 @@ namespace P2SFM
 
 			//PROCESS POINTS
 			//============================================
+			std::cout << "level poitns: " << level_points << std::endl;
+			std::cout << "options : " << options.eligibility_point[level_points] << std::endl;
+
 			Vector<int> eligible_points = SearchEligiblePoints(options.eligibility_point[level_points], visibility, point_path, 
 				cam_path, rejected_points);
 
+			std::cout << "ELIGIBLE POINTS: " << eligible_points << std::endl;
 
 			if (eligible_points.size() != 0)
 			{
@@ -3494,12 +3493,20 @@ namespace P2SFM
 
 				//also modifies last few variables passed by ref
 				//LAST PATH INCREMENT
-
+				if (level_views == 3)
+				{
+					//std::cout << "points" << std::endl << point_path << std::endl;
+					//std::cout << "cams: " << cam_path << std::endl;
+					//std::cout << "eligibles: " << eligible_points << std::endl;
+					//std::cout << "rejected" << std::endl << rejected_points << std::endl;
+					//std::cout << "inliers" << std::endl << inliers << std::endl;
+					//std::cout << "last path: " << last_path << std::endl;
+				}
 
 				std::tie(added, num_added_points) = TryAddingPoints(data, pinv_meas, visibility, normalisations, img_meas, point_path, cam_path,eligible_points,
-					level_views, rejected_points, init_output, inliers, last_path, options);
+					level_points, rejected_points, init_output, inliers, last_path, options);
 
-				//good up to here
+				std::cout << "num added points: " << num_added_points << std::endl;
 				if (num_added_points > 0)
 				{
 					num_known_points += num_added_points;
@@ -3543,7 +3550,7 @@ namespace P2SFM
 	
 					//maybe replace with a temp??
 					//TODO :pathway(init_refine:last_path), fixed(init_refine:last_path)
-					init_output = Refinement(data, pinv_meas, inliers, init_output, init_refine, last_path, true, EigenHelpers::REFINEMENT_TYPE::LOCAL, "", options);
+					init_output = Refinement(data, pinv_meas, inliers, init_output, init_refine, last_path, true, EigenHelpers::REFINEMENT_TYPE::LOCAL, "local", options);
 
 					//diagnosis
 					if (last_dir_change_view == true)
@@ -3556,8 +3563,9 @@ namespace P2SFM
 			}
 
 
-			if (num_added_points!=0 && level_points < (options.max_level_points - options.differ_last_level) )
+			if (num_added_points==0 && level_points < (options.max_level_points - (int)options.differ_last_level) )
 			{
+				std::cout << "level points increment" << std::endl;
 				level_points++;
 				level_changed = true;
 			}
@@ -3574,7 +3582,7 @@ namespace P2SFM
 				//TODO
 				//pathway(1:last_path), fixed(1:last_path)
 				init_output = 
-					Refinement(data, pinv_meas, inliers, init_output, 0, last_path, false, EigenHelpers::REFINEMENT_TYPE::GLOBAL, " Global", options);
+					Refinement(data, pinv_meas, inliers, init_output, 0, last_path, false, EigenHelpers::REFINEMENT_TYPE::GLOBAL, "Global", options);
 			}
 		
 
