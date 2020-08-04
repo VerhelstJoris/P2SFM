@@ -2644,7 +2644,6 @@ namespace P2SFM
 			if (unknown_views(i) == true)
 			{
 				scores[i] = pvs_scores[i].ComputeScore(true) * 100.0;
-				
 				eligibles(0,i) = i;
 				eligibles_compressed(count) = i;
 				count++;
@@ -2655,7 +2654,6 @@ namespace P2SFM
 			}
 		}
 
-
 		//all scores are returned so we can easily identify the corresponding view with eligibles
 		if ( count > thresholds(1))
 		{
@@ -2663,15 +2661,14 @@ namespace P2SFM
 			//sort scores and get best id's
 			EigenHelpers::sortVectorAndMatrix(scores, eligibles,false);
 			auto scoresVec = EigenHelpers::StdVecToEigenVec(scores);
-			return { scoresVec,eligibles.block(0,0,1,thresholds(1)) };
+			return { scoresVec,eligibles.block(0,0,1,std::min(count,thresholds(1)) ) };
 
 		}
 		else
 		{
 			//get id's of eligible
-			eligibles_compressed.conservativeResize(count);
 			auto scoresVec = EigenHelpers::StdVecToEigenVec(scores);
-			return { scoresVec,eligibles.block(0,0,1,thresholds(1)) };
+			return { scoresVec,eligibles_compressed.block(0,0,1,std::min(thresholds(1),count)) };
 		}
 	}
 
@@ -3301,7 +3298,7 @@ namespace P2SFM
 		* inlier_points : Inliers matrix binary mask(FxN)
 	*/
 	template <typename MatrixType, typename IndexType>
-	void Complete(
+	MatrixColSparse<MatrixType, IndexType> Complete(
 		const MatrixColSparse<MatrixType, IndexType>& data,
 		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
 		const MatrixDynamicDense<bool>& visibility,
@@ -3430,10 +3427,8 @@ namespace P2SFM
 				Vector<double> scores;
 
 				//num_added_views is not updated properly and therefore level_views is not either
-				std::cout << "LEVEL VIEWS: " << level_views << std::endl;
 				std::tie(scores, eligibles) = SearchEligibleViews(options.eligibility_view.col(level_views), visibility, point_path,
 					cam_path, rejected_views, pvs_scores);
-				std::cout << "ELIGIBLE VIEWS: " << eligibles << std::endl;
 				//std::cout << "OPTIONS: " << options.eligibility_view.col(level_views) << std::endl << "level: " << level_views << std::endl;
 
 
@@ -3442,7 +3437,6 @@ namespace P2SFM
 
 					std::tie(init_output,num_added_views) =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, point_path, eligibles,
 						level_views, rejected_views, inliers, last_path, options);
-					std::cout << "NUM ADDED VIEWS: " << num_added_views <<std::endl;
 
 					if (num_added_views > 0)
 					{
@@ -3453,7 +3447,6 @@ namespace P2SFM
 						//pathway(init_refine:last_path), fixed(init_refine:last_path)
 						init_output = Refinement(data, pinv_meas, inliers, init_output, init_refine, last_path, false, EigenHelpers::REFINEMENT_TYPE::LOCAL, "local", options);
 						//diagnosis
-
 
 						if (!last_dir_change_view)	//towards points
 						{
@@ -3480,7 +3473,6 @@ namespace P2SFM
 
 			//PROCESS POINTS
 			//============================================
-
 			Vector<int> eligible_points = SearchEligiblePoints(options.eligibility_point[level_points], visibility, point_path, 
 				cam_path, rejected_points);
 
@@ -3490,15 +3482,6 @@ namespace P2SFM
 
 				//also modifies last few variables passed by ref
 				//LAST PATH INCREMENT
-				if (level_views == 3)
-				{
-					std::cout << "points" << std::endl << point_path << std::endl;
-					std::cout << "cams: " << cam_path << std::endl;
-					std::cout << "eligibles: " << eligible_points << std::endl;
-					std::cout << "rejected" << std::endl << rejected_points << std::endl;
-					std::cout << "last path: " << last_path << std::endl;
-				}
-
 				std::tie(added, num_added_points) = TryAddingPoints(data, pinv_meas, visibility, normalisations, img_meas, point_path, cam_path,eligible_points,
 					level_points, rejected_points, init_output, inliers, last_path, options);
 
@@ -3596,11 +3579,12 @@ namespace P2SFM
 			
 		}
 
-
-		init_output.pathway = init_output.pathway.block(0, 0, 1, last_path);
+		init_output.pathway.conservativeResize(last_path);
 		MatrixColSparse<int, IndexType> sub_fixed(init_output.fixed.rows(), last_path );
 		EigenHelpers::GetSparseBlockSparse(init_output.fixed, sub_fixed, 0, 0);
 		init_output.fixed = sub_fixed;
+
+		return inliers;
 	}
 
 }
