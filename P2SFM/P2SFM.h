@@ -2930,10 +2930,12 @@ namespace P2SFM
 
 					//change var passed by ref
 					solveOutput.points.block(0, eligibles(i), 4, 1) = estimation.block(0, 0, 4, 1);
-					for (size_t i = 0; i < inlier_views.size(); i++)
+
+					for (size_t id1 = 0; id1 < inlier_views.size(); id1++)
 					{
-						inliers.coeffRef(inlier_views(i), eligibles(i)) = 1;
+						inliers.coeffRef(inlier_views(id1), eligibles(i)) = 1;	
 					}
+					std::cout << std::endl;
 					added(i) = true;
 
 					solveOutput.pathway(last_path) = eligibles(i);
@@ -3428,9 +3430,10 @@ namespace P2SFM
 				Vector<double> scores;
 
 				//num_added_views is not updated properly and therefore level_views is not either
+				std::cout << "LEVEL VIEWS: " << level_views << std::endl;
 				std::tie(scores, eligibles) = SearchEligibleViews(options.eligibility_view.col(level_views), visibility, point_path,
 					cam_path, rejected_views, pvs_scores);
-				//std::cout << "ELIGIBLES: " << eligibles << std::endl;
+				std::cout << "ELIGIBLE VIEWS: " << eligibles << std::endl;
 				//std::cout << "OPTIONS: " << options.eligibility_view.col(level_views) << std::endl << "level: " << level_views << std::endl;
 
 
@@ -3439,12 +3442,11 @@ namespace P2SFM
 
 					std::tie(init_output,num_added_views) =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, init_output, point_path, eligibles,
 						level_views, rejected_views, inliers, last_path, options);
-					//std::cout << "NUM ADDED: " << num_added_views << std::endl;
+					std::cout << "NUM ADDED VIEWS: " << num_added_views <<std::endl;
 
 					if (num_added_views > 0)
 					{
 						num_known_views += num_added_views;
-						std::cout << "level points decrement" << std::endl;
 						level_points = std::max(1, level_points - 1);
 
 
@@ -3476,16 +3478,11 @@ namespace P2SFM
 			
 			std::tie(point_path,cam_path) = EigenHelpers::GetPointsCamsPathway(init_output.pathway);
 
-
 			//PROCESS POINTS
 			//============================================
-			std::cout << "level poitns: " << level_points << std::endl;
-			std::cout << "options : " << options.eligibility_point[level_points] << std::endl;
 
 			Vector<int> eligible_points = SearchEligiblePoints(options.eligibility_point[level_points], visibility, point_path, 
 				cam_path, rejected_points);
-
-			std::cout << "ELIGIBLE POINTS: " << eligible_points << std::endl;
 
 			if (eligible_points.size() != 0)
 			{
@@ -3495,18 +3492,17 @@ namespace P2SFM
 				//LAST PATH INCREMENT
 				if (level_views == 3)
 				{
-					//std::cout << "points" << std::endl << point_path << std::endl;
-					//std::cout << "cams: " << cam_path << std::endl;
-					//std::cout << "eligibles: " << eligible_points << std::endl;
-					//std::cout << "rejected" << std::endl << rejected_points << std::endl;
-					//std::cout << "inliers" << std::endl << inliers << std::endl;
-					//std::cout << "last path: " << last_path << std::endl;
+					std::cout << "points" << std::endl << point_path << std::endl;
+					std::cout << "cams: " << cam_path << std::endl;
+					std::cout << "eligibles: " << eligible_points << std::endl;
+					std::cout << "rejected" << std::endl << rejected_points << std::endl;
+					std::cout << "last path: " << last_path << std::endl;
 				}
 
 				std::tie(added, num_added_points) = TryAddingPoints(data, pinv_meas, visibility, normalisations, img_meas, point_path, cam_path,eligible_points,
 					level_points, rejected_points, init_output, inliers, last_path, options);
 
-				std::cout << "num added points: " << num_added_points << std::endl;
+				std::cout << "NUM ADDED POINTS: " << num_added_points << std::endl;
 				if (num_added_points > 0)
 				{
 					num_known_points += num_added_points;
@@ -3565,7 +3561,6 @@ namespace P2SFM
 
 			if (num_added_points==0 && level_points < (options.max_level_points - (int)options.differ_last_level) )
 			{
-				std::cout << "level points increment" << std::endl;
 				level_points++;
 				level_changed = true;
 			}
