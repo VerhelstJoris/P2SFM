@@ -23,12 +23,6 @@ template <typename Type> using Array = Eigen::Array<Type, 1, Eigen::Dynamic>;
 const double min_diff_between_values = std::pow(2, -52);	//min difference between 2 values in matlab
 
 
-//TEST
-//TODO: REMOVE
-#include <chrono>
-typedef std::chrono::high_resolution_clock Clock;
-
-
 namespace P2SFM 
 {
 	namespace EigenHelpers
@@ -107,7 +101,6 @@ namespace P2SFM
 			}
 		}
 
-		//TODO: there has to be a cleaner way to get this
 		template <typename MatrixType, typename IndexType>
 		void GetSparseBlockSparse(const MatrixColSparse<MatrixType, IndexType>& matrix,
 			MatrixColSparse<MatrixType, IndexType>& subMat, const int rowId, const int colId)
@@ -214,7 +207,6 @@ namespace P2SFM
 			return ret;
 		}
 
-		//TODO:  restructure the following 2 functions to be less redundant
 		template <typename MatrixType>
 		MatrixDynamicDense<MatrixType> GetRowsDensematrix(const MatrixDynamicDense<MatrixType>& matrix,
 			const Vector<int>& rowIds)
@@ -546,18 +538,15 @@ namespace P2SFM
 			* transformMat: the transformation matrix itself
 		*/
 		template <typename MatrixType, typename IndexType>
-		void NormTrans(const MatrixColSparse<MatrixType, IndexType>& measMat,
-			MatrixColSparse<MatrixType, IndexType>& normalizedMat,
-			MatrixColSparse<MatrixType, IndexType>& transformMat,
-			bool isotropic = true)
+		std::tuple<MatrixColSparse<MatrixType, IndexType>,   MatrixColSparse<MatrixType, IndexType>>
+		NormTrans(const MatrixColSparse<MatrixType, IndexType>& measMat, bool isotropic = true)
 		{
 			IndexType dimensions = measMat.rows();
-			normalizedMat.resize(dimensions, measMat.cols());
+			MatrixColSparse<MatrixType, IndexType> normalizedMat(dimensions, measMat.cols());
 			normalizedMat.reserve(measMat.nonZeros());
 
+			MatrixColSparse<MatrixType, IndexType> transformMat(dimensions, dimensions);
 			transformMat.reserve((3 * dimensions) / 9 * 5);
-			transformMat.resize(dimensions, dimensions);
-
 
 			//create array 
 			Array<double> tempArr(dimensions); //temporary to store differences/centroids
@@ -676,10 +665,13 @@ namespace P2SFM
 					}
 				}
 			}
+
+			return { normalizedMat, transformMat };
 		}
 
 
 
+		//TODO: threadsafe randomness
 		template <typename MatrixType>
 		void RandPerm(std::vector<MatrixType>& vec, const MatrixType minVal, const MatrixType maxVal)
 		{
@@ -696,7 +688,7 @@ namespace P2SFM
 		}
 
 		//construct a matrix
-		//TO-DO:
+		//TODO:
 		//ADD A MORE INDEPTH DESCRIPTION
 		template <typename MatrixType>
 		inline Eigen::Matrix<MatrixType, 3, 3> CrossProductMatrix(const Eigen::Matrix<MatrixType, 3, 1>& measEntry)
@@ -709,7 +701,7 @@ namespace P2SFM
 			return M;
 		}
 
-		//TO-DO:
+		//TODO:
 		//ADD A MORE INDEPTH DESCRIPTION
 		template <typename MatrixType>
 		MatrixDynamicDense<MatrixType> Estimate(const MatrixDynamicDense<MatrixType>& coeffs, bool enforceRank=true)
@@ -774,7 +766,7 @@ namespace P2SFM
 			return fundamental_matrix;
 		}
 
-		//TO-DO:
+		//TODO:
 		//ADD A MORE INDEPTH DESCRIPTION
 		template <typename MatrixType>
 		std::tuple<VectorVertical<MatrixType>, MatrixDynamicDense<MatrixType>>
@@ -896,8 +888,8 @@ namespace P2SFM
 		/*
 		Compute Vectorization of fundamental matrix (a' * F * b = 0)
 		Input: 
-			*a: a single projection
-			*b: a single projection
+			*a: a single projection containing (at least) 2 elements
+			*b: a single projection containing (at least) 2 elements
 		Output:
 			* vectorization of Fundamental Matrix  
 		*/
@@ -909,7 +901,8 @@ namespace P2SFM
 			return ret;
 		}
 
-		/* Find a random subset of given size ensuring that at least one of the value is from a given subset.
+		/* 
+		Find a random subset of given size ensuring that at least one of the values is from a given subset.
 			
 		Input:
 			* complete_set : The complete set from which the random subset is drawn ordered such that the last entries are the ones
@@ -921,7 +914,7 @@ namespace P2SFM
 		template <typename MatrixType>
 		Vector<MatrixType> RandomSubset(const Vector<MatrixType>& complete_set, const int num_rejected, const int num_sample)
 		{
-			//rand relies does int
+			//rand relies on int
 			//TODO: CHANGE RANDOMNESS??
 			if (num_rejected > 0)
 			{
@@ -1317,7 +1310,7 @@ namespace P2SFM
       * measurements: Original image coordinates (2FxN sparse matrix where missing data are [0;0])
       * options:  Structure containing options, can be left blank for default values
      Output:
-	  * measurements: Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores (3FxN
+	  * hom_measurements: Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores (3FxN)
       * data: Matrix containing the data to compute the cost function (2Fx3N)
       * pinv_meas: Matrix containing the data for elimination of projective depths,
 	    cross-product matrix or pseudo-inverse of the of the normalized homogeneous coordinates (Fx3N)
@@ -1326,23 +1319,29 @@ namespace P2SFM
       * normalisations: Normalisation transformation for each camera stacked vertically (3Fx3)
       */
 	template <typename MatrixType, typename IndexType>
-	void PrepareData(
+	std::tuple< MatrixColSparse<MatrixType, IndexType>, //homogeneous measurements
+		MatrixColSparse<MatrixType, IndexType>, //data
+		MatrixColSparse<MatrixType, IndexType>, //pinv_meas
+		MatrixColSparse<MatrixType, IndexType>, //norm_meas
+		MatrixColSparse<MatrixType, IndexType>, //normalisations
+		MatrixDynamicDense<bool> //visibility
+		> PrepareData(
 		MatrixColSparse<MatrixType, IndexType>& measurements,
-		MatrixColSparse<MatrixType,  IndexType>& data,
-		MatrixColSparse<MatrixType,  IndexType>& pinv_meas,
-		MatrixColSparse<MatrixType,  IndexType>& norm_meas,
-		MatrixColSparse<MatrixType,  IndexType>& normalisations,
-		MatrixDynamicDense<bool>& visibility,
 		const Options& options = Options())
 	{
+		//return values
+		MatrixColSparse<MatrixType, IndexType> hom_measurements(measurements.rows() + (measurements.rows() / 2), measurements.cols());
+		MatrixColSparse<MatrixType, IndexType> data;
+		MatrixColSparse<MatrixType, IndexType> pinv_meas;
+		MatrixColSparse<MatrixType, IndexType> norm_meas;
+		MatrixColSparse<MatrixType, IndexType> normalisations;
+		MatrixDynamicDense<bool> visibility(measurements.rows() / 2, measurements.cols());
+		visibility.fill(false);
+
 		//Points not visible enough will never be considered, removing them make data matrices smaller and computations more efficient
 		const int optionsVal = options.eligibility_point[options.max_level_points];
 
-		//setup visibility matrix
-		visibility.resize(measurements.rows() / 2, measurements.cols());
-		visibility.fill(false);
-
-		//[x,y] -> [x,y,1]
+		//[x,y]measurement -> [x,y,1] hom_measurements
 		std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
 		tripletList.reserve(measurements.nonZeros() / 2);
 
@@ -1377,16 +1376,15 @@ namespace P2SFM
 			}
 		}
 
-		measurements.reserve(tripletList.size());
-		measurements.resize(measurements.rows() + (measurements.rows() / 2), measurements.cols());
-		measurements.setFromTriplets(tripletList.begin(), tripletList.end());
+		hom_measurements.reserve(tripletList.size());
+		hom_measurements.setFromTriplets(tripletList.begin(), tripletList.end());
 
-		const int numVisible = measurements.nonZeros();
-		const int numViews = measurements.rows();
-		const int numPoints = measurements.cols();
+		const int numVisible = hom_measurements.nonZeros();
+		const int numViews = hom_measurements.rows();
+		const int numPoints = hom_measurements.cols();
 
 
-		AlgebraHelpers::NormTrans(measurements, norm_meas, normalisations);
+		std::tie(norm_meas, normalisations) = AlgebraHelpers::NormTrans(hom_measurements);
 
 
 		std::vector<Eigen::Triplet<MatrixType,IndexType>> tripletDLTPINV;	
@@ -1440,9 +1438,11 @@ namespace P2SFM
 		pinv_meas.reserve(tripletDLTPINV.size());
 		pinv_meas.setFromTriplets(tripletDLTPINV.begin(), tripletDLTPINV.end());
 
-		data.resize(measurements.rows()/3*2 , norm_meas.cols() * 3);
+		data.resize(measurements.rows() , norm_meas.cols() * 3);
 		data.reserve(tripletData.size());
 		data.setFromTriplets(tripletData.begin(), tripletData.end());
+
+		return { hom_measurements,data,pinv_meas,norm_meas, normalisations, visibility };
 
 	}
 
@@ -1658,13 +1658,16 @@ namespace P2SFM
 	/*
 	Retrieve projective Camera position (one of two, with the other being considered an identity) and projective Points positions from fundamental matrix
 	Input:
-		*
-		*
+		* norm_meas: 
+		* initial_points
+		* fundamental_mat
+		* initial views: 
 	Output:
-		* cameras : Projective estimation of the initial cameras (6x4)
-		* points : Projective estimation of the initial points (4xK)
-		* pathway : Array containing the order in which views(negative) and points(positive) has been added (1 x 2 + K)
-		* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points (1 x 2 + K)
+		InitialSolveOutput struct containing:
+			* cameras : Projective estimation of the initial cameras (6x4)
+			* points : Projective estimation of the initial points (4xK)
+			* pathway : Array containing the order in which views(negative) and points(positive) has been added (1 x 2 + K)
+			* fixed : Cell containing arrays of the points or views used in the constraints to add initial views and points (1 x 2 + K)
 	*/
 	template <typename MatrixType, typename IndexType>
 	InitialSolveOutput<MatrixType, IndexType> ComputeCamPts(
@@ -2254,13 +2257,6 @@ namespace P2SFM
 			}
 		}
 
-		//TODO: IMPLEMENT
-		//last condition/input argument
-		//if nargin > 7 && sort_inliers
-		//	[~, idx] = sort(reproj_errs(inlier_points));
-		//inlier_points = inlier_points(idx);
-		//end
-
 		score += (known_points.size() - inliers.size())*threshold;
 
 		return { reproj_errors_sub, inliers,score };
@@ -2771,7 +2767,7 @@ namespace P2SFM
 			if (options.debuginform >= Options::InformDebug::REGULAR)
 			{
 				std::cout << "View: " << eligibles(i) << " (" << visible_points.block(0, 0, 1, count).size() <<
-					" visible points, rejected "  /*TODO INSERT  rejected_views(eligibles(idx_view)) HERE*/ << ")" << std::endl;
+					" visible points, rejected " << rejected_views(eligibles(i)) << ")" << std::endl;
 			}
 
 			VectorVertical<MatrixType> estim;
@@ -3527,8 +3523,6 @@ namespace P2SFM
 
 					level_views = std::max(1, level_views - 1);
 	
-					//maybe replace with a temp??
-					//TODO :pathway(init_refine:last_path), fixed(init_refine:last_path)
 					init_output = Refinement(data, pinv_meas, inliers, init_output, init_refine, last_path, true, EigenHelpers::REFINEMENT_TYPE::LOCAL, "local", options);
 
 					//diagnosis
@@ -3557,7 +3551,6 @@ namespace P2SFM
 
 			if (num_iter - iter_refine > options.global_refine)
 			{
-				//TODO
 				//pathway(1:last_path), fixed(1:last_path)
 				init_output = 
 					Refinement(data, pinv_meas, inliers, init_output, 0, last_path, false, EigenHelpers::REFINEMENT_TYPE::GLOBAL, "Global", options);
