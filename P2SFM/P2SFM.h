@@ -788,20 +788,12 @@ namespace P2SFM
 
 			for (size_t i = 0; i <= last_iteration; i++)
 			{
-				//create random permutation of 8 values between 0 - (num_projs-1) without repeating elements
-				//std::generate(test_set.begin(), test_set.end(), [num_projs,&test_set]() 
-				//{ 
-				//	int num;
-				//	do
-				//	{
-				//		num = rand() % (num_projs - 1);
-				//	} while (std::find(test_set.begin(),test_set.end(),num)!=test_set.end());
-				//	
-				//	return num; 
-				//});
-
-				//RandPerm(test_set,num_projs-1,0);
-				std::vector<int> test_set{ 12, 89, 93, 102, 124, 136, 106, 79 };	//TEST SET
+		
+				//TODO: REMOVE TEST SET
+				std::vector<int> test_set(8);
+				RandPerm(test_set,0,num_projs-1);	//if there are not enough num_projs, the program should have returned earlier warning about this
+		
+				//std::vector<int> test_set{ 12, 89, 93, 102, 124, 136, 106, 79 };	//TEST SET
 
 				//create 'submatrix' coeffs with only the test set rows
 				MatrixDynamicDense<MatrixType> subMat(8, coeffs.cols());
@@ -1253,7 +1245,6 @@ namespace P2SFM
 
 		// Diagnosis options
 		InformDebug debuginform = InformDebug::REGULAR; //NONE,REGULAR,VERBOSE
-		bool debug = false; // display everything possible, that's a lot of things
 		bool diagnosis = false; // display the graphical diagnosis
 		bool diagnosis_upgrade = false; // include the metric upgrade in graphical diagnosis(takes a lot of time !)
 		bool diagnosis_completed = false; // include the completed measurements in graphical diagnosis(usually slow)
@@ -1487,8 +1478,9 @@ namespace P2SFM
 			for (int secondLoop = firstLoop + 3; secondLoop < transposedMat.outerSize(); secondLoop += 3)
 			{
 
-				//get the common points
+				//get the common points -> col entries in both rows
 				auto commonPoints = visibility.row(firstLoop / 3) && visibility.row(secondLoop / 3);
+
 				//how many commonpoints are there?
 				if (commonPoints.count() > options.min_common_init)
 				{
@@ -2474,12 +2466,13 @@ namespace P2SFM
 
 			//get test_set indices from entries_id
 			//test_set is not used after this point so can be repurposed
+			//std::cout << "entries id: " << entries_id.size() << "     " << test_set<< std::endl;
 			for (size_t j = 0; j < test_set.size(); j++)
 			{
 				test_set(j) = entries_id(test_set(j));
 			}
 
-			std::cout << "TEST SET " << (estim_views ? "VIEWS: " : "POINTS: ") << test_set << std::endl;
+			//std::cout << "TEST SET " << (estim_views ? "VIEWS: " : "POINTS: ") << test_set << std::endl;
 
 			//TODO: REMOVE LATER
 			if (estim_views)
@@ -2554,8 +2547,8 @@ namespace P2SFM
 							//adaptive maximum number of iterations
 							double ratio = (double)inliers.size() / entries_id.size();
 							double prob = std::max(min_diff_between_values, std::min(1.0-min_diff_between_values, 1 - pow(ratio,estim_views?options.minimal_view[level]:options.minimal_point[level])));
-							last_iteration = std::min(int(std::ceil(log_conf / log(prob))), options.max_iter_robust[1]);
-							std::cout << "LAST ITERATION CHANGE: " << last_iteration << std::endl;
+							last_iteration = std::min(int(std::ceil(log_conf / log(prob))), estim_views?options.max_iter_robust[1]:options.max_iter_robust[0]);
+							//std::cout << "LAST ITERATION CHANGE: " << last_iteration << std::endl;
 						}
 					
 					}
@@ -2741,6 +2734,7 @@ namespace P2SFM
 			std::cout << " Trying to add " << eligibles.size() << " eligible(s) view(s) at level: " << level << std::endl;
 		}
 
+		//std::cout << eligibles << std::endl;
 		int num_added = 0;
 
 		for (size_t i = 0; i < eligibles.size(); i++)
@@ -2763,6 +2757,8 @@ namespace P2SFM
 					" visible points, rejected " << rejected_views(eligibles(i)) << ")" << std::endl;
 			}
 
+
+
 			VectorVertical<MatrixType> estim;
 			Vector<int>inlier_points;
 			if (options.robust_estimation)
@@ -2776,6 +2772,7 @@ namespace P2SFM
 				estim = std::get<0>(EstimateView(data, pinv_meas, solveOutput.points, visible_points.block(0, 0, 1, count), eligibles(i), visible_points.size()));
 				inlier_points = visible_points;
 			}
+
 
 			if (estim.size() == 0)
 			{
@@ -3385,7 +3382,7 @@ namespace P2SFM
 
 		//main loop 
 		while ((num_known_points < num_points || num_known_views < num_views) &&
-			(level_changed || num_added_views + num_added_points >0) )
+			(level_changed==true || num_added_views + num_added_points > 0) )
 		{
 			level_changed = false;
 			num_added_points = 0;
@@ -3420,6 +3417,8 @@ namespace P2SFM
 
 					std::tie(new_projections,num_added_views) =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, new_projections, point_path, eligibles,
 						level_views, rejected_views, inliers, last_path, options);
+
+					//std::cout << "num added: " << num_added_views;
 
 					if (num_added_views > 0)
 					{
@@ -3555,7 +3554,11 @@ namespace P2SFM
 				}
 
 			}
-			
+
+			//std::cout << num_known_points << " " << num_points << " " << num_known_views << " " << num_views << " " << level_changed << std::endl;
+			//std::cout << num_added_views << " " << num_added_points << std::endl;
+			//std::cout << "ITERATION: ";
+
 		}
 
 		new_projections.pathway.conservativeResize(last_path);
