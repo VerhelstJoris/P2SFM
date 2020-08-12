@@ -249,6 +249,26 @@ namespace P2SFM
 			return ret;
 		}
 
+		template <typename MatrixType>
+		Vector<MatrixType> GetVecIndices(const Vector<MatrixType>& vec,
+			const Vector<bool>& ids)
+		{
+			Vector<int> temp((ids.array() > 0).count());
+
+			int count = 0;
+			for (size_t i = 0; i < ids.size(); i++)
+			{
+				if (ids(i) == true)
+				{
+					temp(count) = i;
+					count++;
+				}
+			}
+
+			return GetVecIndices(vec, temp);
+		}
+
+
 
 		Vector<int> GetMaskIndices(const Vector<bool>& mask)
 		{
@@ -1802,22 +1822,38 @@ namespace P2SFM
 		MatrixColSparse<int, IndexType> fixed;
 		Vector<int> pathway;
 
-		//find matches in view_pairs and estimated_views
 
-		//TO-DO: IMPLEMENT FIND MATCHES
-		//estimated_pairs = ismember(view_pairs, estimated_views);    %find matching rows
-		
-		//both_unestimated = all(~estimated_pairs, 2);        %both row values are 0 / 1
-		//one_estimated = any(estimated_pairs, 2) & ~all(estimated_pairs, 2);
-		//sorted_idx = horzcat(find(both_unestimated)', find(one_estimated)');
+		//sort view_pairs in such a way that entries with 0 matches to estimated_views come first, then 1, then 2
 
+		Vector<int> both_unestimated(view_pairs.rows());
+		Vector<int> one_estimated(view_pairs.rows());
+		int count_both = 0, count_one = 0;
+
+		for (size_t i = 0; i < view_pairs.rows(); i++)
+		{
+
+			int amount = (view_pairs.row(i)(0) == estimated_views.array()).count() + (view_pairs.row(i)(1) == estimated_views.array()).count();
+			if (amount==1)
+			{
+				one_estimated(count_one) = i;
+				count_one++;
+			}
+			else if (amount == 0)
+			{
+				both_unestimated(count_both) = i;
+				count_both++;
+			}
+		}
+
+		Vector<int> pairs_sorted(count_both + count_one);
+		pairs_sorted << both_unestimated.block(0, 0, 1, count_both), one_estimated.block(0, 0, 1, count_one);
 
 		//match row in estimated_views and view_pairs
 		//find matches 
-		for (size_t i = 0; i < view_pairs.rows(); i++)
+		for (size_t i = 0; i < pairs_sorted.size(); i++)
 		{
-			int firstViewRow = view_pairs(i, 0);
-			int secondViewRow = view_pairs(i, 1);
+			int firstViewRow = view_pairs(pairs_sorted(i), 0);
+			int secondViewRow = view_pairs(pairs_sorted(i), 1);
 
 			//get visible points norm meas for both first and second views and estimate fundamental mat from that
 			MatrixDynamicDense<MatrixType> firstViewDense, secondViewDense;
