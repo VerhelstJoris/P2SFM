@@ -931,12 +931,15 @@ namespace P2SFM
 			if (num_rejected > 0)
 			{
 				//include at least one of the new data
-				int non_rejected = num_rejected + (rand() % complete_set.size() - num_rejected);
+				std::cout << complete_set.size() - num_rejected << std::endl;
+				int non_rejected = num_rejected + (rand() % (complete_set.size() - num_rejected));
 				std::vector<MatrixType> temp_set(num_sample - 1, -1);
-				RandPerm(temp_set, non_rejected + 1, (int)complete_set.size() - 1);
+				RandPerm(temp_set, 0, (int)complete_set.size()-1);
+
 				Vector<MatrixType> test_set(temp_set.size() + 1);
 				test_set << EigenHelpers::StdVecToEigenVec(temp_set), non_rejected;
 
+				std::cout << "TEST SET: "<< test_set << std::endl;
 				return test_set;
 			}
 			else
@@ -2498,8 +2501,16 @@ namespace P2SFM
 		//main loop
 		for (size_t i = 0; i < last_iteration; i++)
 		{
-			auto test_set = AlgebraHelpers::RandomSubset(entries_id, rejected_views,  estim_views?options.minimal_view[level]:options.minimal_point[level]);
+			std::cout << "START LOOP" << std::endl;
+			if (rejected_views != 0)
+			{
+				std::cout << "entries id: " << entries_id << std::endl;
+				std::cout << "rejected id: " << rejected_views << std::endl;
+			}
 
+
+			auto test_set = AlgebraHelpers::RandomSubset(entries_id, rejected_views,  estim_views?options.minimal_view[level]:options.minimal_point[level]);
+		
 			//get test_set indices from entries_id
 			//test_set is not used after this point so can be repurposed
 			//std::cout << "entries id: " << entries_id.size() << "     " << test_set<< std::endl;
@@ -2508,22 +2519,7 @@ namespace P2SFM
 				test_set(j) = entries_id(test_set(j));
 			}
 
-			//std::cout << "TEST SET " << (estim_views ? "VIEWS: " : "POINTS: ") << test_set << std::endl;
-
-			//TODO: REMOVE LATER
-			if (estim_views)
-			{
-				//test_set << 186, 250, 244, 214, 174, 225, 171, 198, 189;
-			}
-			else
-			{
-				//test_set.resize(3);
-				//test_set << entries_id(0), entries_id(1), entries_id(2);	//non-random 
-
-				
-
-				EstimatePoint(data, pinv_meas, solve_out.cameras, test_set, new_view, 1, options.rank_tolerance);
-			}
+			std::cout << "TEST SET: " <<  test_set << std::endl;
 
 			auto result_test_set = estim_views ? EstimateView(data, pinv_meas, solve_out.points, test_set, new_view, 5, options.rank_tolerance)://6 -> 5 due to indexing
 				EstimatePoint(data, pinv_meas, solve_out.cameras, test_set, new_view, 1, options.rank_tolerance);	//2->1
@@ -2591,6 +2587,7 @@ namespace P2SFM
 
 				}
 			}
+
 		}
 
 		return { best_estim,best_inliers };
@@ -2794,12 +2791,13 @@ namespace P2SFM
 			}
 
 
-
+			
 			VectorVertical<MatrixType> estim;
 			Vector<int>inlier_points;
 			if (options.robust_estimation)
 			{
 				//care about both outputs
+				std::cout << "ESTIMATE VIEWS" << std::endl;
 				std::tie(estim,inlier_points) = EstimateRobust(data,pinv_meas, solveOutput,visible_points.block(0, 0, 1, count),eligibles(i),rejected_views(eligibles(i)),normalisations,img_meas,level,true,options);
 			}
 			else
@@ -2920,6 +2918,7 @@ namespace P2SFM
 				Vector<int>inlier_views;
 				if (options.robust_estimation)
 				{
+					std::cout << "ESTIMATE POINTS" << std::endl;
 					std::tie(estimation,inlier_views)=EstimateRobust(data, pinv_meas, solveOutput, visible_views, eligibles(i), rejected_points(eligibles(i))
 						, normalisations, img_meas, level,false, options);
 				}
@@ -2928,6 +2927,7 @@ namespace P2SFM
 					estimation = std::get<0>(EstimatePoint(data, pinv_meas, solveOutput.cameras, visible_views, eligibles(i), visible_views.size()));
 					inlier_views = visible_views;
 				}
+				std::cout << "AFTER ESTIM" << std::endl;
 
 
 
@@ -3420,6 +3420,7 @@ namespace P2SFM
 		while ((num_known_points < num_points || num_known_views < num_views) &&
 			(level_changed==true || num_added_views + num_added_points > 0) )
 		{
+
 			level_changed = false;
 			num_added_points = 0;
 			num_added_views = 0;
@@ -3436,6 +3437,7 @@ namespace P2SFM
 
 			//PROCESS VIEWS
 			//====================================================
+
 			if (num_known_views < num_views)
 			{
 				//search_eligible_views
@@ -3491,8 +3493,12 @@ namespace P2SFM
 
 			//PROCESS POINTS
 			//============================================
+
 			Vector<int> eligible_points = SearchEligiblePoints(options.eligibility_point[level_points], visibility, point_path, 
 				cam_path, rejected_points);
+
+			std::cout << " ELIGIBLE POINTS" << std::endl;
+			std::cout << eligible_points << std::endl;
 
 			if (eligible_points.size() != 0)
 			{
@@ -3502,6 +3508,11 @@ namespace P2SFM
 				//LAST PATH INCREMENT
 				std::tie(added, num_added_points) = TryAddingPoints(data, pinv_meas, visibility, normalisations, img_meas, point_path, cam_path,eligible_points,
 					level_points, rejected_points, new_projections, inliers, last_path, options);
+
+				std::cout << "NUM ADDED POINTS" << std::endl;
+				std::cout << added << std::endl;
+				std::cout << num_added_points << std::endl;
+
 
 				if (num_added_points > 0)
 				{
@@ -3555,6 +3566,7 @@ namespace P2SFM
 					}
 				}
 			}
+			std::cout << "END POINTS" << std::endl;
 
 
 			if (num_added_points==0 && level_points < (options.max_level_points - (int)options.differ_last_level) )
@@ -3594,6 +3606,7 @@ namespace P2SFM
 			//std::cout << num_known_points << " " << num_points << " " << num_known_views << " " << num_views << " " << level_changed << std::endl;
 			//std::cout << num_added_views << " " << num_added_points << std::endl;
 			//std::cout << "ITERATION: ";
+			std::cout << "END LOOP" << std::endl;
 
 		}
 
