@@ -414,20 +414,26 @@ namespace P2SFM
 		template <typename MatrixType, typename IndexType>
 		void SparseRemoveCols(MatrixColSparse<MatrixType, IndexType>& matrix, Vector<int> cols)
 		{
-			std::sort(cols.data(), cols.data() + cols.size());	
-
-			int count = 0;
-			for (int k = 0; k < matrix.outerSize(); ++k)	//skipping last element in cols
+			if (cols.size() != 0)
 			{
-				if (cols(count) == k && count < cols.size())
+
+				std::sort(cols.data(), cols.data() + cols.size());	
+
+				//std::cout << matrix.cols() << " : " << cols << std::endl;
+
+				int count = 0;
+				for (int k = 0; k < matrix.outerSize(); ++k)	//skipping last element in cols
 				{
-					count = (count +1)%cols.size();	//clamp to max
-				}
-				else
-				{
-					for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(matrix, k); it; ++it)
+					if (cols(count) == k && count < cols.size())
 					{
-						it.valueRef() = (MatrixType)0;
+						count = (count + 1) % cols.size();	//clamp to max
+					}
+					else
+					{
+						for (typename MatrixColSparse<MatrixType, IndexType>::InnerIterator it(matrix, k); it; ++it)
+						{
+							it.valueRef() = (MatrixType)0;
+						}
 					}
 				}
 			}
@@ -813,7 +819,7 @@ namespace P2SFM
 				std::vector<int> test_set(8);
 				RandPerm(test_set,0,num_projs-1);	//if there are not enough num_projs, the program should have returned earlier warning about this
 		
-				//std::vector<int> test_set{ 12, 89, 93, 102, 124, 136, 106, 79 };	//TEST SET
+				//std::vector<int> test_set{ 152, 149, 199, 138, 254, 0, 231, 110 };	//TEST SET
 
 				//create 'submatrix' coeffs with only the test set rows
 				MatrixDynamicDense<MatrixType> subMat(8, coeffs.cols());
@@ -931,7 +937,6 @@ namespace P2SFM
 			if (num_rejected > 0)
 			{
 				//include at least one of the new data
-				std::cout << complete_set.size() - num_rejected << std::endl;
 				int non_rejected = num_rejected + (rand() % (complete_set.size() - num_rejected));
 				std::vector<MatrixType> temp_set(num_sample - 1, -1);
 				RandPerm(temp_set, 0, (int)complete_set.size()-1);
@@ -939,7 +944,6 @@ namespace P2SFM
 				Vector<MatrixType> test_set(temp_set.size() + 1);
 				test_set << EigenHelpers::StdVecToEigenVec(temp_set), non_rejected;
 
-				std::cout << "TEST SET: "<< test_set << std::endl;
 				return test_set;
 			}
 			else
@@ -1035,7 +1039,6 @@ namespace P2SFM
 					for (MatrixColSparse<int32_t,int>::InnerIterator it(proj_count, k); it; ++it)
 					{
 						indices.push_back(Eigen::Vector2i(it.row(), it.col()));
-						//std::cout << "row: " << it.row() << " col: " << it.col() << " val: " << it.value() << std::endl;
 					}
 				}
 
@@ -1622,7 +1625,10 @@ namespace P2SFM
 			//do we have enough inlier_points (options.min_common_init)
 			if (inliers.rows() < options.min_common_init)
 			{
-				std::cout << std::endl << "EstimateFundamentalMat: not enough inliers found" << std::endl;
+				if (options.debuginform >= Options::InformDebug::REGULAR)
+					std::cout << std::endl << "EstimateFundamentalMat: not enough inliers found" << std::endl;
+
+
 				return { fundMat,inliers,false };
 			}
 
@@ -1904,7 +1910,8 @@ namespace P2SFM
 			}
 		}
 		
-		std::cout << "views did not meet minimum requirements, no good computeCamPts found!, returning empty variables" << std::endl;
+		if(options.debuginform >= Options::InformDebug::REGULAR)
+			std::cout << "views did not meet minimum requirements, no good computeCamPts found!, returning empty variables" << std::endl;
 
 		//if reached here, should be empty all outputs are empty -> return false
 		return { {cameras,points,fixed,pathway},false };
@@ -2074,6 +2081,7 @@ namespace P2SFM
 		}
 
 		bool found = false;
+		//std::cout << r.rows() << ", " << r.cols() << std::endl;
 		for (size_t i = 0; i < r.cols(); i++)
 		{
 			if (abs(r(i, i)) < tol_rank)
@@ -2501,25 +2509,15 @@ namespace P2SFM
 		//main loop
 		for (size_t i = 0; i < last_iteration; i++)
 		{
-			std::cout << "START LOOP" << std::endl;
-			if (rejected_views != 0)
-			{
-				std::cout << "entries id: " << entries_id << std::endl;
-				std::cout << "rejected id: " << rejected_views << std::endl;
-			}
-
 
 			auto test_set = AlgebraHelpers::RandomSubset(entries_id, rejected_views,  estim_views?options.minimal_view[level]:options.minimal_point[level]);
 		
 			//get test_set indices from entries_id
 			//test_set is not used after this point so can be repurposed
-			//std::cout << "entries id: " << entries_id.size() << "     " << test_set<< std::endl;
 			for (size_t j = 0; j < test_set.size(); j++)
 			{
 				test_set(j) = entries_id(test_set(j));
 			}
-
-			std::cout << "TEST SET: " <<  test_set << std::endl;
 
 			auto result_test_set = estim_views ? EstimateView(data, pinv_meas, solve_out.points, test_set, new_view, 5, options.rank_tolerance)://6 -> 5 due to indexing
 				EstimatePoint(data, pinv_meas, solve_out.cameras, test_set, new_view, 1, options.rank_tolerance);	//2->1
@@ -2580,7 +2578,6 @@ namespace P2SFM
 							double ratio = (double)inliers.size() / entries_id.size();
 							double prob = std::max(min_diff_between_values, std::min(1.0-min_diff_between_values, 1 - pow(ratio,estim_views?options.minimal_view[level]:options.minimal_point[level])));
 							last_iteration = std::min(int(std::ceil(log_conf / log(prob))), estim_views?options.max_iter_robust[1]:options.max_iter_robust[0]);
-							//std::cout << "LAST ITERATION CHANGE: " << last_iteration << std::endl;
 						}
 					
 					}
@@ -2701,18 +2698,15 @@ namespace P2SFM
 
 		Vector<bool> unknown_points(num_points);
 		unknown_points.setOnes();
-		Vector<int> unknown_id(points_id.size());
 
 		//every value in points_id set to true
 		int count = 0;
 		for (size_t i = 0; i < points_id.size(); i++)
 		{
 			unknown_points(points_id(i)) = false;
-			unknown_id(count) = points_id(i);
 		}
 
 		Vector<int> eligible_points(num_points);	//max possible size
-
 
 		auto subMat = EigenHelpers::GetRowsColsDensematrix(visibility, views_id, unknown_points);
 
@@ -2724,7 +2718,7 @@ namespace P2SFM
 			{
 				int col_amount = (subMat.col(count).array() > 0).count();
 
-				if (col_amount > rejected_points(count) &&
+				if (col_amount > rejected_points(i) &&
 					col_amount >= eligibility_min)
 				{
 					eligible_points(second_count) = i;
@@ -2767,7 +2761,6 @@ namespace P2SFM
 			std::cout << " Trying to add " << eligibles.size() << " eligible(s) view(s) at level: " << level << std::endl;
 		}
 
-		//std::cout << eligibles << std::endl;
 		int num_added = 0;
 
 		for (size_t i = 0; i < eligibles.size(); i++)
@@ -2797,7 +2790,6 @@ namespace P2SFM
 			if (options.robust_estimation)
 			{
 				//care about both outputs
-				std::cout << "ESTIMATE VIEWS" << std::endl;
 				std::tie(estim,inlier_points) = EstimateRobust(data,pinv_meas, solveOutput,visible_points.block(0, 0, 1, count),eligibles(i),rejected_views(eligibles(i)),normalisations,img_meas,level,true,options);
 			}
 			else
@@ -2882,6 +2874,7 @@ namespace P2SFM
 			int& last_path,
 			const Options& options = Options())
 		{
+
 			if (options.debuginform == Options::InformDebug::VERBOSE)
 			{
 				std::cout << " Trying to add " << eligibles.size() << " eligible(s) point(s) at level: " << level << std::endl;
@@ -2918,7 +2911,6 @@ namespace P2SFM
 				Vector<int>inlier_views;
 				if (options.robust_estimation)
 				{
-					std::cout << "ESTIMATE POINTS" << std::endl;
 					std::tie(estimation,inlier_views)=EstimateRobust(data, pinv_meas, solveOutput, visible_views, eligibles(i), rejected_points(eligibles(i))
 						, normalisations, img_meas, level,false, options);
 				}
@@ -2927,7 +2919,6 @@ namespace P2SFM
 					estimation = std::get<0>(EstimatePoint(data, pinv_meas, solveOutput.cameras, visible_views, eligibles(i), visible_views.size()));
 					inlier_views = visible_views;
 				}
-				std::cout << "AFTER ESTIM" << std::endl;
 
 
 
@@ -2955,9 +2946,8 @@ namespace P2SFM
 					}
 					added(i) = true;
 
-					solveOutput.pathway(last_path) = eligibles(i);
 
-					//solveOutput.fixed.reserve(inlier_views.size());	
+					solveOutput.pathway(last_path) = eligibles(i);
 
 					for (size_t i = 0; i < inlier_views.size(); i++)
 					{
@@ -3032,8 +3022,6 @@ namespace P2SFM
 			//only care about the first ouput in this case
 			VectorVertical<MatrixType> estim = std::get<0>(EstimatePoint(data, pinv_meas, solveOutput.cameras, combined, current_id, count));
 
-			//std::cout << "ESTIM " << std::endl << estim.block(0, 0, 4, 1);
-			//std::cout << "ESTIM " << std::endl << points.col(i);
 
 			if (estim.size()==0)
 			{
@@ -3340,7 +3328,7 @@ namespace P2SFM
 
 		auto expand_result = CheckExpandInit(new_projections,inliers, num_views,num_points);
 
-		int last_path = std::get<1>(expand_result); //indexing
+		int last_path = std::get<1>(expand_result)-1; //indexing
 		if (std::get<0>(expand_result) == true)
 		{
 			//TODO PROPER OUT/RETuRN??
@@ -3497,9 +3485,6 @@ namespace P2SFM
 			Vector<int> eligible_points = SearchEligiblePoints(options.eligibility_point[level_points], visibility, point_path, 
 				cam_path, rejected_points);
 
-			std::cout << " ELIGIBLE POINTS" << std::endl;
-			std::cout << eligible_points << std::endl;
-
 			if (eligible_points.size() != 0)
 			{
 				Vector<bool> added;
@@ -3508,10 +3493,6 @@ namespace P2SFM
 				//LAST PATH INCREMENT
 				std::tie(added, num_added_points) = TryAddingPoints(data, pinv_meas, visibility, normalisations, img_meas, point_path, cam_path,eligible_points,
 					level_points, rejected_points, new_projections, inliers, last_path, options);
-
-				std::cout << "NUM ADDED POINTS" << std::endl;
-				std::cout << added << std::endl;
-				std::cout << num_added_points << std::endl;
 
 
 				if (num_added_points > 0)
@@ -3566,7 +3547,6 @@ namespace P2SFM
 					}
 				}
 			}
-			std::cout << "END POINTS" << std::endl;
 
 
 			if (num_added_points==0 && level_points < (options.max_level_points - (int)options.differ_last_level) )
@@ -3602,11 +3582,6 @@ namespace P2SFM
 				}
 
 			}
-
-			//std::cout << num_known_points << " " << num_points << " " << num_known_views << " " << num_views << " " << level_changed << std::endl;
-			//std::cout << num_added_views << " " << num_added_points << std::endl;
-			//std::cout << "ITERATION: ";
-			std::cout << "END LOOP" << std::endl;
 
 		}
 
