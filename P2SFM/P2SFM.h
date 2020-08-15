@@ -523,10 +523,15 @@ namespace P2SFM
 			return retVec;
 		}
 	
-		std::tuple<Vector<int>,Vector<int>> GetPointsCamsPathway(const Vector<int>& pathway, const int last)
+
+		//return a tuple containing the actual values and one containing the id's
+		std::tuple <Vector<int>,Vector<int> , Vector<int>, Vector<int> > 
+			GetPointsCamsPathway(const Vector<int>& pathway, const int last)
 		{
 			Vector<int> point_path((pathway.block(0,0,1,last).array() >= 0).count());
 			Vector<int> cam_path((pathway.block(0, 0, 1, last).array()<0).count());
+			Vector<int> point_id(point_path.size());
+			Vector<int> cam_id(cam_path.size());
 
 			int count_point = 0;
 			int count_cam = 0;
@@ -535,17 +540,19 @@ namespace P2SFM
 				if (pathway(i) >= 0)
 				{
 					point_path(count_point) = pathway(i);
+					point_id(count_point) = i;
 					count_point++;
 				}
 				if (pathway(i) < 0)
 				{
 					//account for the fact that every value had 1 added to it
 					cam_path(count_cam) = -pathway(i)-1;
+					cam_id(count_cam) = i;
 					count_cam++;
 				}
 			}
 
-			return { point_path,cam_path };
+			return { point_path,cam_path,point_id,cam_id };
 		}
 }
 
@@ -1937,7 +1944,7 @@ namespace P2SFM
 		}
 
 		Vector<int> cams, points;
-		std::tie(points, cams) = EigenHelpers::GetPointsCamsPathway(solved.pathway, solved.pathway.size());
+		std::tie(points, cams,std::ignore,std::ignore) = EigenHelpers::GetPointsCamsPathway(solved.pathway, solved.pathway.size());
 
 		if (solved.cameras.rows() != 3 * num_views)
 		{
@@ -3165,29 +3172,18 @@ namespace P2SFM
 
 
 		//get all values in pathway >0 and all id's of values <0
-		int point_amount = (sub_path.array() > 0).count();
-		int cam_amount =   (sub_path.array() < 0).count();
+		int point_amount = (sub_path.array().block(0,0,1,last_path) >= 0).count();
+		int cam_amount =   (sub_path.array().block(0,0,1,last_path) < 0).count();
 		int	count_point = 0, count_cam = 0;
 		Vector<int> known_points(point_amount);	//actual values stored
-		Vector<int> points_id(point_amount);		
+		Vector<int> points_id(point_amount);	//id's
 		Vector<int> camera_id(cam_amount);	//id's
  		Vector<int> known_cams(cam_amount);	//actual value
 
-		for (size_t i = 0; (i < sub_path.size() || (count_point < point_amount && count_cam < cam_amount)); i++)
-		{
-			if (sub_path(i) > 0)
-			{
-				known_points(count_point) = sub_path(i);
-				points_id(count_point) = i;
-				count_point++;
-			}
-			else if (sub_path(i) < 0) //camera_id
-			{
-				camera_id(count_cam) = i;
-				known_cams(count_cam) = sub_path(i);
-				count_cam++;
-			}
-		}
+		//retrieve both tuples
+		std::tie(known_points,known_cams, points_id, camera_id ) = EigenHelpers::GetPointsCamsPathway(solveOutput.pathway, last_path);
+		//known_points = std::ref(std::get<0>(std::get<0>(result)));
+		//std::cout << std::get<0>(std::get<0>(result)) << std::endl;
 
 
 		//MATLAB: known_cams3 = kron(-3 * pathway(idx_cameras), [1 1 1]) - kron(ones(1, length(idx_cameras)), [2 1 0]);
@@ -3243,7 +3239,7 @@ namespace P2SFM
 				new_output.cameras = ReEstimateAllViews(data, pinv_meas, vis_copy, new_output, camera_id);
 			}
 
-			if (options.debuginform >= 1)
+			if (options.debuginform >= Options::InformDebug::REGULAR)
 			{
 				change_cam = (old_cameras - EigenHelpers::GetRowsDensematrix(new_output.cameras, known_cams3)).norm() / sqrt((old_cameras.array() > (MatrixType)0).count());
 				change_points = (old_points - EigenHelpers::GetColsDensematrix(new_output.points, known_points)).norm() / sqrt((old_points.array() > (MatrixType)0).count());
@@ -3354,7 +3350,7 @@ namespace P2SFM
 		//get all elements in pathway that are >0
 		Vector<int> point_path;
 		Vector<int> cam_path;
-		std::tie(point_path, cam_path) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway,last_path);
+		std::tie(point_path, cam_path, std::ignore, std::ignore) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway,last_path);
 
 
 		//create matrix for projs, massively oversized (create afterwards without having to retrieve all elements twice??)
@@ -3401,7 +3397,7 @@ namespace P2SFM
 
 		//ppsfm_diagnosis()
 
-		std::cout << "START LOOP " << std::endl << new_projections.pathway << std::endl;
+		std::cout << "START LOOP " << std::endl << new_projections.pathway.size() << std::endl;
 
 
 		//main loop 
@@ -3419,12 +3415,12 @@ namespace P2SFM
 			}
 			else
 			{
-				std::tie(point_path, cam_path) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway,last_path);	//can be skipped if this is the first loop
+				std::tie(point_path, cam_path, std::ignore, std::ignore) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway,last_path);	//can be skipped if this is the first loop
 			}
 
 			//PROCESS VIEWS
 			//====================================================
-
+			std::cout << "VIEWS" << std::endl;
 			if (num_known_views < num_views)
 			{
 				//search_eligible_views
@@ -3436,14 +3432,13 @@ namespace P2SFM
 					cam_path, rejected_views, pvs_scores);
 				//std::cout << "OPTIONS: " << options.eligibility_view.col(level_views) << std::endl << "level: " << level_views << std::endl;
 
+				std::cout << eligibles << std::endl;
+
 
 				if (eligibles.size() != 0)
 				{
-					std::cout << "PATHWAY" << std::endl;
-					std::cout << new_projections.pathway << std::endl;
 					num_added_views =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, point_path, eligibles,
 						level_views, new_projections, rejected_views, inliers, last_path, options);
-					std::cout << "ADDING VIEWS " << std::endl << new_projections.pathway << std::endl;
 
 
 					if (num_added_views > 0)
@@ -3455,6 +3450,7 @@ namespace P2SFM
 						//pathway(init_refine:last_path), fixed(init_refine:last_path)
 						new_projections = Refinement(data, pinv_meas, inliers, new_projections, init_refine, last_path, false, EigenHelpers::REFINEMENT_TYPE::LOCAL, "local", options);
 						//diagnosis
+
 
 						if (!last_dir_change_view)	//towards points
 						{
@@ -3477,13 +3473,16 @@ namespace P2SFM
 			point_path.resize((new_projections.pathway.array() > 0).count());
 			cam_path.resize((new_projections.pathway.array() < 0).count());
 			
-			std::tie(point_path,cam_path) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway,last_path);
+			std::tie(point_path,cam_path,std::ignore, std::ignore) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway,last_path);
 
 			//PROCESS POINTS
 			//============================================
+			std::cout << "POINTS" << std::endl;
 
 			Vector<int> eligible_points = SearchEligiblePoints(options.eligibility_point[level_points], visibility, point_path, 
 				cam_path, rejected_points);
+
+			std::cout << "eligible points: " << eligible_points;
 
 			if (eligible_points.size() != 0)
 			{
@@ -3590,6 +3589,9 @@ namespace P2SFM
 		MatrixColSparse<int, IndexType> sub_fixed(new_projections.fixed.rows(), last_path );
 		EigenHelpers::GetSparseBlockSparse(new_projections.fixed, sub_fixed, 0, 0);
 		new_projections.fixed = sub_fixed;
+
+		std::cout << new_projections.pathway << std::endl;
+
 
 		return { new_projections, inliers };
 	}
