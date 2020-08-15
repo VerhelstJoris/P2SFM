@@ -523,29 +523,29 @@ namespace P2SFM
 			return retVec;
 		}
 	
-		std::tuple<Vector<int>,Vector<int>> GetPointsCamsPathway(const Vector<int>& pathway)
+		std::tuple<Vector<int>,Vector<int>> GetPointsCamsPathway(const Vector<int>& pathway, const int last)
 		{
-			Vector<int> point_path((pathway.array() > 0).count());
-			Vector<int> cam_path((pathway.array()<0).count());
+			Vector<int> point_path((pathway.block(0,0,1,last).array() >= 0).count());
+			Vector<int> cam_path((pathway.block(0, 0, 1, last).array()<0).count());
 
 			int count_point = 0;
 			int count_cam = 0;
-			for (int i = 0; i < pathway.size(); i++)
+			for (int i = 0; i < last; i++)
 			{
-				if (pathway(i) > 0)
+				if (pathway(i) >= 0)
 				{
 					point_path(count_point) = pathway(i);
 					count_point++;
 				}
 				if (pathway(i) < 0)
 				{
-					cam_path(count_cam) = -pathway(i);
+					//account for the fact that every value had 1 added to it
+					cam_path(count_cam) = -pathway(i)-1;
 					count_cam++;
 				}
 			}
 
 			return { point_path,cam_path };
-
 		}
 }
 
@@ -816,10 +816,10 @@ namespace P2SFM
 			{
 		
 				//TODO: REMOVE TEST SET
-				std::vector<int> test_set(8);
-				RandPerm(test_set,0,num_projs-1);	//if there are not enough num_projs, the program should have returned earlier warning about this
+				//std::vector<int> test_set(8);
+				//RandPerm(test_set,0,num_projs-1);	//if there are not enough num_projs, the program should have returned earlier warning about this
 		
-				//std::vector<int> test_set{ 152, 149, 199, 138, 254, 0, 231, 110 };	//TEST SET
+				std::vector<int> test_set{ 152, 149, 199, 138, 254, 0, 231, 110 };	//TEST SET
 
 				//create 'submatrix' coeffs with only the test set rows
 				MatrixDynamicDense<MatrixType> subMat(8, coeffs.cols());
@@ -1728,7 +1728,8 @@ namespace P2SFM
 
 		Vector<int> pathway(initial_points.size() + 2);
 		// intial views are added to initial points between element 0-1 and 1-2
-		pathway << initial_points(0), -initial_views(0), initial_points(1), -initial_views(1), initial_points.block(0, 2, 1, initial_points.cols() - 2);//rest of initial_points
+		//initial views have 1 added to them to ensure the value is always negative (0 is not)
+		pathway << initial_points(0), -(initial_views(0)+1), initial_points(1), -(initial_views(1)+1), initial_points.block(0, 2, 1, initial_points.cols() - 2);//rest of initial_points
 
 		MatrixColSparse<int, IndexType> fixed(2, initial_points.size() + 2);
 		std::vector<Eigen::Triplet<int, IndexType>> triplets;
@@ -1935,21 +1936,20 @@ namespace P2SFM
 			return { false,0 };
 		}
 
+		Vector<int> cams, points;
+		std::tie(points, cams) = EigenHelpers::GetPointsCamsPathway(solved.pathway, solved.pathway.size());
+
 		if (solved.cameras.rows() != 3 * num_views)
 		{
 			MatrixDynamicDense<MatrixType> newCameras(3*num_views,4);
 			newCameras.setZero();
 
-			//pathway(1)(second element) is element -initial_views(0) back in EstimateFunMat()
-			for (size_t i = 0 ; i < 3; i++)
+			for (size_t i = 0; i < cams.size(); i++)
 			{
-				newCameras.row((-3 * solved.pathway(1)) +i) = solved.cameras.row(i);
-			}
+				newCameras.row(3 * cams(i))   = solved.cameras.row(i*3+ 0);
+				newCameras.row(3 * cams(i)+1) = solved.cameras.row(i*3 + 1);
+				newCameras.row(3 * cams(i)+2) = solved.cameras.row(i*3 + 2);
 
-			//pathway(3)(4th element) is element -initial_views(0) back in EstimateFunMat()
-			for (size_t i = 0; i < 3; i++)
-			{
-				newCameras.row((-3 * solved.pathway(3)) + i ) = solved.cameras.row(i  +3);
 			}
 
 			solved.cameras.resize(3 * num_views, 4);	//can only resize afterwards to prevent being destructive
@@ -1960,17 +1960,11 @@ namespace P2SFM
 		if (solved.points.cols() != num_points)
 		{
 			MatrixDynamicDense<MatrixType> tempPoints(4, num_points);	//should this be a sparse matrix?
-			tempPoints.setZero();
+			tempPoints.setZero();		
 
-			int count = 0;
-			for (size_t i = 0; i < solved.pathway.size(); i++)
+			for (size_t i = 0; i < points.size(); i++)
 			{
-				//do not consider the 2 initial_views values
-				if (solved.pathway(i) > 0)
-				{
-					tempPoints.col(solved.pathway(i)) = solved.points.col(count);
-					count++;
-				}
+				tempPoints.col(points(i)) = solved.points.col(i);
 			}
 
 			solved.points.resize(4, num_points);
@@ -1982,20 +1976,18 @@ namespace P2SFM
 		if (inliers.nonZeros() == 0 && (solved.pathway.array() < 0).count() == 2)
 		{
 			std::vector<Eigen::Triplet<MatrixType, IndexType>> tripletList;
-			tripletList.reserve(solved.pathway.size() * 2);
+			tripletList.reserve(solved.pathway.size() * cams.size());
 
-			const int firstRow = -solved.pathway(1);
-			const int secondRow = -solved.pathway(3);
-
-			//set the two rows for initial_views values to 1 where the col value 
-			for (size_t i = 0; i < solved.pathway.size(); i++)
+		
+			for (size_t i = 0; i <points.size(); i++)
 			{
-				if (solved.pathway(i) > 0)
+				
+				for (size_t j = 0; j < cams.size(); j++)
 				{
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(firstRow, solved.pathway(i), 1));
-					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(secondRow, solved.pathway(i), 1));
+					tripletList.push_back(Eigen::Triplet<MatrixType, IndexType>(cams(j), points(i), 1));
 				}
 			}
+			
 
 			inliers.setFromTriplets(tripletList.begin(), tripletList.end());
 		}		
@@ -2739,22 +2731,21 @@ namespace P2SFM
 	//rejected views is non-const
 	//does not just return a solveOutput, also modifies non-const parameters
 	template <typename MatrixType, typename IndexType>
-	std::tuple<ViewsPointsProjections<MatrixType, IndexType>, int> TryAddingViews(
+	int TryAddingViews(
 		const MatrixColSparse<MatrixType, IndexType>& data,
 		const MatrixColSparse<MatrixType, IndexType>& pinv_meas,
 		const MatrixDynamicDense<bool>& visibility,
 		const MatrixColSparse<MatrixType, IndexType>& normalisations,
 		const MatrixColSparse<MatrixType, IndexType>& img_meas,
-		const ViewsPointsProjections<MatrixType, IndexType>& solveOutput,
 		const Vector<int>& points_id,	//all positive values in pathway
 		const Vector<int>& eligibles,
 		const int level,
+		ViewsPointsProjections<MatrixType, IndexType>& projections,
 		Vector<int>& rejected_views,
 		MatrixColSparse<MatrixType, IndexType>& inliers,
 		int& last_path,
 		const Options& options = Options())
 	{
-		ViewsPointsProjections<MatrixType, IndexType> output = solveOutput;
 
 		if (options.debuginform == Options::InformDebug::VERBOSE)
 		{
@@ -2776,6 +2767,7 @@ namespace P2SFM
 					count++;
 				}
 			}
+			visible_points.conservativeResize(count);
 			
 			if (options.debuginform >= Options::InformDebug::REGULAR)
 			{
@@ -2784,18 +2776,17 @@ namespace P2SFM
 			}
 
 
-			
 			VectorVertical<MatrixType> estim;
 			Vector<int>inlier_points;
 			if (options.robust_estimation)
 			{
 				//care about both outputs
-				std::tie(estim,inlier_points) = EstimateRobust(data,pinv_meas, solveOutput,visible_points.block(0, 0, 1, count),eligibles(i),rejected_views(eligibles(i)),normalisations,img_meas,level,true,options);
+				std::tie(estim,inlier_points) = EstimateRobust(data,pinv_meas, projections,visible_points,eligibles(i),rejected_views(eligibles(i)),normalisations,img_meas,level,true,options);
 			}
 			else
 			{
 				//care only about first of 4 outputs
-				estim = std::get<0>(EstimateView(data, pinv_meas, solveOutput.points, visible_points.block(0, 0, 1, count), eligibles(i), visible_points.size()));
+				estim = std::get<0>(EstimateView(data, pinv_meas, projections.points, visible_points, eligibles(i), visible_points.size()));
 				inlier_points = visible_points;
 			}
 
@@ -2816,7 +2807,7 @@ namespace P2SFM
 
 				for (size_t j = 0; j < 3; j++)
 				{
-					output.cameras.row( eligibles(i) * 3  +j) = estim.block(4*j, 0, 4, 1).transpose();
+					projections.cameras.row( eligibles(i) * 3  +j) = estim.block(4*j, 0, 4, 1).transpose();
 
 				}
 
@@ -2825,10 +2816,10 @@ namespace P2SFM
 				//inliers.makeCompressed();
 				//inliers.reserve(inlier_points.size());
 
-				if (output.fixed.rows() < inlier_points.size())
+				if (projections.fixed.rows() < inlier_points.size())
 				{
 					//output.fixed.makeCompressed();
-					output.fixed.conservativeResize(inlier_points.size(), output.fixed.cols()); //keeps elements 
+					projections.fixed.conservativeResize(inlier_points.size(), projections.fixed.cols()); //keeps elements 
 				}
 
 				//output.fixed.reserve(inlier_points.size());
@@ -2837,11 +2828,11 @@ namespace P2SFM
 					inliers.coeffRef(eligibles(i), inlier_points(j)) = 1;
 
 					//add values to correct column in output.fixed
-					output.fixed.coeffRef(j, last_path) = inlier_points(j);
+					projections.fixed.coeffRef(j, last_path) = inlier_points(j);
 				}
 			
-				//pathway(last_path) = -eligibles(idx_view);
-				output.pathway(last_path) = -eligibles(i);
+				//add 1 to ensure negative
+				projections.pathway(last_path) = -(eligibles(i)+1);
 
 				last_path++;	
 
@@ -2850,7 +2841,7 @@ namespace P2SFM
 			}
 		}
 
-		return { output,num_added };
+		return num_added;
 	}
 
 		//TODO:
@@ -2939,6 +2930,7 @@ namespace P2SFM
 
 					//change var passed by ref
 					solveOutput.points.block(0, eligibles(i), 4, 1) = estimation.block(0, 0, 4, 1);
+					std::cout << "points";
 
 					for (size_t id1 = 0; id1 < inlier_views.size(); id1++)
 					{
@@ -2946,14 +2938,19 @@ namespace P2SFM
 					}
 					added(i) = true;
 
-
+					std::cout << "inliers";
 					solveOutput.pathway(last_path) = eligibles(i);
 
+					std::cout << "pathway " << solveOutput.pathway(last_path) << std::endl;
+
+					std::cout << solveOutput.fixed.rows() << " " << solveOutput.fixed.cols() << " "<< inlier_views.size() <<std::endl;
 					for (size_t i = 0; i < inlier_views.size(); i++)
 					{
+						std::cout << i << " " << last_path << std::endl;
 						//error at very first
 						solveOutput.fixed.insert(i, last_path) = inlier_views(i);
 					}
+					std::cout << "fixed";
 
 					last_path++;
 
@@ -3322,13 +3319,14 @@ namespace P2SFM
 		const int num_points = (int)visibility.cols();
 		ViewsPointsProjections<MatrixType, IndexType> new_projections = init_projections;
 
+
 		//allocate space for a sparse mat
 		MatrixColSparse<MatrixType, IndexType> inliers(num_views, num_points);
 		inliers.reserve((visibility.array() >0).count());
 
 		auto expand_result = CheckExpandInit(new_projections,inliers, num_views,num_points);
 
-		int last_path = std::get<1>(expand_result)-1; //indexing
+		int last_path = std::get<1>(expand_result); //indexing
 		if (std::get<0>(expand_result) == true)
 		{
 			//TODO PROPER OUT/RETuRN??
@@ -3354,10 +3352,9 @@ namespace P2SFM
 		MatrixColSparse<MatrixType, IndexType> copyMat(img_meas.transpose());
 
 		//get all elements in pathway that are >0
-		Vector<int> point_path((new_projections.pathway.array() > 0).count());
-		Vector<int> cam_path((new_projections.pathway.array() < 0).count());
-		std::tie(point_path, cam_path) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway);
-
+		Vector<int> point_path;
+		Vector<int> cam_path;
+		std::tie(point_path, cam_path) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway,last_path);
 
 
 		//create matrix for projs, massively oversized (create afterwards without having to retrieve all elements twice??)
@@ -3404,6 +3401,9 @@ namespace P2SFM
 
 		//ppsfm_diagnosis()
 
+		std::cout << "START LOOP " << std::endl << new_projections.pathway << std::endl;
+
+
 		//main loop 
 		while ((num_known_points < num_points || num_known_views < num_views) &&
 			(level_changed==true || num_added_views + num_added_points > 0) )
@@ -3419,9 +3419,8 @@ namespace P2SFM
 			}
 			else
 			{
-				std::tie(point_path, cam_path) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway);	//can be skipped if this is the first loop
+				std::tie(point_path, cam_path) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway,last_path);	//can be skipped if this is the first loop
 			}
-			//std::cout << point_path << std::endl;
 
 			//PROCESS VIEWS
 			//====================================================
@@ -3440,11 +3439,12 @@ namespace P2SFM
 
 				if (eligibles.size() != 0)
 				{
+					std::cout << "PATHWAY" << std::endl;
+					std::cout << new_projections.pathway << std::endl;
+					num_added_views =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, point_path, eligibles,
+						level_views, new_projections, rejected_views, inliers, last_path, options);
+					std::cout << "ADDING VIEWS " << std::endl << new_projections.pathway << std::endl;
 
-					std::tie(new_projections,num_added_views) =  TryAddingViews(data, pinv_meas, visibility, normalisations, img_meas, new_projections, point_path, eligibles,
-						level_views, rejected_views, inliers, last_path, options);
-
-					//std::cout << "num added: " << num_added_views;
 
 					if (num_added_views > 0)
 					{
@@ -3477,7 +3477,7 @@ namespace P2SFM
 			point_path.resize((new_projections.pathway.array() > 0).count());
 			cam_path.resize((new_projections.pathway.array() < 0).count());
 			
-			std::tie(point_path,cam_path) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway);
+			std::tie(point_path,cam_path) = EigenHelpers::GetPointsCamsPathway(new_projections.pathway,last_path);
 
 			//PROCESS POINTS
 			//============================================
@@ -3493,6 +3493,7 @@ namespace P2SFM
 				//LAST PATH INCREMENT
 				std::tie(added, num_added_points) = TryAddingPoints(data, pinv_meas, visibility, normalisations, img_meas, point_path, cam_path,eligible_points,
 					level_points, rejected_points, new_projections, inliers, last_path, options);
+				std::cout << "POINTS ADDED" << std::endl;
 
 
 				if (num_added_points > 0)
