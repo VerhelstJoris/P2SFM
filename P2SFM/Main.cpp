@@ -18,71 +18,6 @@ void Timer(std::chrono::time_point<std::chrono::steady_clock> t1, std::chrono::t
 }
 
 
-template <typename MatrixType, typename IndexType>
-std::tuple<P2SFM::ViewsPointsProjections<double, int64_t>, P2SFM::ViewsPointsProjections<double, int64_t>, MatrixColSparse<double, int64_t> >
-P2SFM_Main(
-	MatrixColSparse<MatrixType, IndexType>& data,
-	MatrixColSparse<MatrixType, IndexType>& pinv_meas,
-	MatrixColSparse<MatrixType, IndexType>& norm_meas,
-	MatrixColSparse<MatrixType, IndexType>& hom_measurements,
-	MatrixColSparse<MatrixType, IndexType>& normalisations,
-	MatrixDynamicDense<MatrixType>& sizeInput,
-	MatrixDynamicDense<MatrixType>& centerInput,
-	MatrixDynamicDense<bool>& visibility,
-	std::vector<int>& affinity,
-	MatrixDynamicDense<int>& view_pairs,
-	P2SFM::Options& opt = P2SFM::Options())
-{
-	//INITIALISATION
-	//=====================================================
-	MatrixDynamicDense<int>estimated(0, 0);
-	auto t3 = Clock::now();
-
-	bool success;
-	//use same indextype as other sparse matrices to prevent weird conversion errors
-	P2SFM::ViewsPointsProjections<double, int64_t> projections_initial, projections_final;
-
-	std::tie(projections_initial, success) = P2SFM::Initialisation(norm_meas, visibility, affinity, view_pairs, estimated, opt);
-	if (!success)
-		continue;	//go to next iteration of the loop
-
-	auto t4 = Clock::now();
-	Timer(t3, t4, "Initialisation");
-
-
-	//COMPLETION
-	//=====================================================
-	MatrixColSparse<double, int64_t> inliers;
-	std::tie(projections_final, inliers) = P2SFM::Complete(data, pinv_meas, visibility, normalisations, hom_measurements, sizeInput, centerInput, projections_initial, opt);
-	auto t5 = Clock::now();
-	Timer(t4, t5, "Completion");
-
-	if (opt.debuginform >= P2SFM::Options::InformDebug::REGULAR)
-	{
-		std::cout << " Reconstructed";
-	}
-
-	//FINAL REFINEMENT
-	//====================================================
-	if (opt.final_refinement)
-	{
-		projections_final = P2SFM::Refinement(data, pinv_meas, inliers, projections_final, 0, projections_final.pathway.size(), false, P2SFM::EigenHelpers::REFINEMENT_TYPE::FINAL, "Final", opt);
-		if (opt.debuginform >= P2SFM::Options::InformDebug::REGULAR)
-		{
-			Timer(t3, Clock::now(), " Final Refinement");
-		}
-	}
-
-	return { projections_initial,projections_final,inliers };
-
-}
-
-template <typename MatrixType, typename IndexType>
-void test1(const MatrixColSparse<MatrixType, IndexType>& data)
-{
-	std::cout << 1;
-}
-
 /*Input:
 	* measurements : Original image coordinates(2FxN sparse matrix where missing data are[0; 0])
 	* image_size : Size of the images, used to compute the pyramidal visibility scores(2xF)
@@ -98,10 +33,10 @@ int main()
 
 	P2SFM::Options opt = P2SFM::Options();
 	const char* fileName = "Dataset/dino319.mat";
-	//const char* fileName = "Dataset/library.mat";
+	//const char* fileName = "Dataset/house.mat";
 	//const char* fileName = "Dataset/cherubColmap.mat";
 	opt.min_common_init = 50;
-	opt.debuginform = P2SFM::Options::InformDebug::NONE;
+	opt.debuginform = P2SFM::Options::InformDebug::REGULAR;
 
 	Helper::ReadDenseMatrixFromMat(fileName,"centers", centerInput);
 	Helper::ReadDenseMatrixFromMat(fileName,"image_size", sizeInput);
@@ -114,8 +49,6 @@ int main()
 	auto result = Helper::ReadSparseMatrixFromMat(fileName, "measurements", measureSparse);
 
 	std::cout << "Sparse matrix loaded in" << std::endl;
-
-
 
 	auto t1 = Clock::now();
 
@@ -132,14 +65,7 @@ int main()
 	auto t2 = Clock::now();
 	Timer(t1, t2, "PrepareData");
 
-	//MatrixColSparse<double, int64_t>* testMatFile = new MatrixColSparse<double, int64_t>();
-	//result = Helper::ReadSparseMatrixFromMat("D:/Msc Computing/Msc Project/DATA/dataset/testNew.mat", "pinv_meas", testMatFile);
-	//std::cout << "RESULT: " << result << std::endl;
 
-	//std::cout << "NORM FILE" << std::endl << (*testMatFile).row(0);
-	//auto equality = testMatFile->isApprox(pinv_meas,0.99);
-	//std::cout << "equal: " << equality << std::endl;
-	
 	//PAIRS AFFINITY
 	//======================================================
 	std::vector<int> affinity;
@@ -149,43 +75,42 @@ int main()
 	auto t3 = Clock::now();
     Timer(t2, t3, "PairsAffinity");
 
+	std::cout << "VIEW PAIRS" << std::endl << view_pairs << std::endl;
 
-	//each thread should output/push_back into this vector
-	std::vector<std::tuple<P2SFM::ViewsPointsProjections<double, int64_t>, 
+	std::vector<std::tuple<P2SFM::ViewsPointsProjections<double, int64_t>,
 		P2SFM::ViewsPointsProjections<double, int64_t>, MatrixColSparse<double, int64_t> >> models;
 
 
-	//std::vector<std::thread> thread_group;
-	//
-	////create threads
-	//for (size_t i = 0; i < opt.max_models; i++)
-	//{
-	//	thread_group.push_back(std::thread(P2SFM_Main<double, int64_t>, std::ref(data), std::ref(pinv_meas), std::ref(norm_meas),
-	//		std::ref(hom_measurements), std::ref(normalisations), std::ref(*sizeInput),
-	//		std::ref(*centerInput), std::ref(visibility), std::ref(affinity), std::ref(view_pairs), std::ref(opt)));
-	//}
-	
-	//output//join threads
 
-	 
+	Vector<int> estimated_views(0);
+	int iteration = 0;
+
 	for (size_t i = 0; i < opt.max_models; i++)
 	{
+		iteration++;
+
 		//INITIALISATION
-		//=====================================================
-		MatrixDynamicDense<int>estimated(0, 0);
-	
+		//=====================================================	
 		bool success;
 		//use same indextype as other sparse matrices to prevent weird conversion errors
 		P2SFM::ViewsPointsProjections<double, int64_t> projections_initial, projections_final;
 	
-		std::tie(projections_initial, success) = P2SFM::Initialisation(norm_meas, visibility, affinity, view_pairs, estimated, opt);
+		//std::cout << "ESTIMATED " << std::endl << estimated_views << std::endl;
+
+		std::tie(projections_initial, success) = P2SFM::Initialisation(norm_meas, visibility, affinity, view_pairs, estimated_views, opt);
 		if (!success)
-			continue;	//go to next iteration of the loop
-	
+		{
+			std::cout << "failed to robsutly solve initial problem" << std::endl;
+			break;	
+		}
+
 		auto t4 = Clock::now();
 		Timer(t3, t4, "Initialisation");
 	
-	
+		//std::cout << projections_initial.pathway << std::endl;
+		//std::cout << projections_initial.cameras << std::endl;
+		//std::cout << projections_initial.points << std::endl; //some values in poitns have their sign flipped
+
 		//COMPLETION
 		//=====================================================
 		MatrixColSparse<double, int64_t> inliers;
@@ -202,6 +127,7 @@ int main()
 		//====================================================
 		if (opt.final_refinement)
 		{
+			std::cout << "FINAL REFINEMENT 0-" << projections_final.pathway.size() << std::endl;
 			projections_final = P2SFM::Refinement(data, pinv_meas, inliers, projections_final, 0, projections_final.pathway.size(), false, P2SFM::EigenHelpers::REFINEMENT_TYPE::FINAL, "Final", opt);
 			if (opt.debuginform >= P2SFM::Options::InformDebug::REGULAR)
 			{
@@ -209,11 +135,52 @@ int main()
 			}
 		}
 	
-		//store proj_init/proj_final/inliers
 		models.push_back({ projections_initial, projections_final, inliers });
+
+		std::cout << "initial: " << std::endl << projections_initial.pathway << std::endl << "final: " << std::endl << projections_final.pathway << std::endl;
+
+		std::cout << "BEFORE ESTIMATED VIEWS: " << estimated_views << std::endl;
+
+
+		//append negative pathway values to estimated views + sort + remove duplicate elements
+		Vector<int> cams = std::get<1>(P2SFM::EigenHelpers::GetPointsCamsPathway(projections_final.pathway, 0, projections_final.pathway.size()));
+
+		//create vector containing both, including duplicates
+		Vector<int> duplicates(estimated_views.size() + cams.size());
+		duplicates << estimated_views, cams;
+		std::sort(duplicates.data(), duplicates.data() + duplicates.size());
+		estimated_views.resize(duplicates.size()); // resize and discard previous data
+
+
+		int count = 0; int prevElem=-1;
+		for (size_t i = 0; i < duplicates.size(); i++)
+		{
+			if (prevElem != duplicates(i))
+			{
+				estimated_views(count) = duplicates(i);
+				count++;
+			}
+
+			prevElem = duplicates(i);
+		}
+
+		estimated_views.conservativeResize(count);
+
+		std::cout << "ESTIMATED VIEWS: " << estimated_views << std::endl;
+
+
+		if (estimated_views.size() == visibility.rows())
+		{
+			std::cout << "enough views have been estimated" << std::endl;
+			break;
+		}
+		else if (opt.debuginform >= P2SFM::Options::InformDebug::REGULAR)
+		{
+			std::cout << "Incomplete reconstruction, estimated a total of " << estimated_views.size() << "/" << visibility.rows()
+				<< "(" << (double)estimated_views.size() / visibility.rows() * 100.0 << "%) views over " << i+1 << " model(s)" << std::endl;
+		}
 	}
 
-	std::cout << opt.max_models << " iterations" << std::endl;
 	Timer(t1, Clock::now(), " END OF PROGRAM TIME");
 	
 	
