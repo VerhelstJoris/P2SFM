@@ -107,7 +107,7 @@ int main()
 		auto t4 = Clock::now();
 		Timer(t3, t4, "Initialisation");
 	
-		//std::cout << projections_initial.pathway << std::endl;
+		std::cout << projections_initial.pathway << std::endl;
 		//std::cout << projections_initial.cameras << std::endl;
 		//std::cout << projections_initial.points << std::endl; //some values in poitns have their sign flipped
 
@@ -141,9 +141,8 @@ int main()
 
 		std::cout << "BEFORE ESTIMATED VIEWS: " << estimated_views << std::endl;
 
-
 		//append negative pathway values to estimated views + sort + remove duplicate elements
-		Vector<int> cams = std::get<1>(P2SFM::EigenHelpers::GetPointsCamsPathway(projections_final.pathway, 0, projections_final.pathway.size()));
+		Vector<int> cams = std::get<1>(P2SFM::EigenHelpers::GetPointsCamsPathway(projections_final.pathway, 0, projections_final.pathway.size()-1));
 
 		//create vector containing both, including duplicates
 		Vector<int> duplicates(estimated_views.size() + cams.size());
