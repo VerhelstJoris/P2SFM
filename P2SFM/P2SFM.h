@@ -541,14 +541,14 @@ namespace P2SFM
 				if (pathway(i) >= 0)
 				{
 					point_path(count_point) = pathway(i);
-					point_id(count_point) = i;
+					point_id(count_point) = i - first;
 					count_point++;
 				}
 				if (pathway(i) < 0)
 				{
 					//account for the fact that every value had 1 added to it
 					cam_path(count_cam) = -pathway(i)-1;
-					cam_id(count_cam) = i;
+					cam_id(count_cam) = i - first;
 					count_cam++;
 				}
 			}
@@ -2322,6 +2322,7 @@ namespace P2SFM
 
 		int new_view_id = 2 * new_view;
 		
+
 		MatrixDynamicDense<MatrixType> sys(2 * num_points, 12); //LLS system
 		MatrixDynamicDense<MatrixType> pos(num_points, 12); // positivity constraint (projective depths)
 		MatrixDynamicDense<MatrixType> G(3, 12);
@@ -2362,7 +2363,7 @@ namespace P2SFM
 
 		VectorVertical<MatrixType>b = -sys.block(0, 0, sys.rows(), 1) / con(0);
 
-		//std::cout << con << std::endl;
+		std::cout << con << std::endl;
 
 		return { SolveLLS(A,b,con,tol_rank),sys,con,pos };
 
@@ -2983,14 +2984,16 @@ namespace P2SFM
 	{
 		MatrixDynamicDense<MatrixType> points(solveOutput.points);
 
+		std::cout << std::endl << "pathway: " << solveOutput.pathway << "   size: " << solveOutput.pathway.size() << std::endl;
+		std::cout << std::endl << "points id: " << points_id << "   size: " << points_id.size() << std::endl;
+
 		for (size_t i = 0; i < points_id.size(); i++)
 		{
 			int current_id = solveOutput.pathway(points_id(i));
 				
-			//std::cout << std::endl << "pathway: " << solveOutput.pathway << "   size: " << solveOutput.pathway.size() << std::endl;
-			//std::cout << std::endl << "points id: " << points_id << "   size: " << points_id.size() << std::endl;
-			//std::cout << "points id value: " << points_id(i) << std::endl;
-			//std::cout << "current id: " << current_id << std::endl;
+		
+			std::cout << "points id value: " << points_id(i) << std::endl;
+			std::cout << "current id: " << current_id << std::endl;
 
 
 			//get col from solveOutput.fixed
@@ -3050,14 +3053,14 @@ namespace P2SFM
 	{
 		MatrixDynamicDense<MatrixType> cameras(solveOutput.cameras);
 
+		std::cout << "cameras: " << cameras_id << std::endl;
+		std::cout << "pathway block: " << solveOutput.pathway << std::endl;
+		std::cout << "pathway block size: " << solveOutput.pathway.size() << std::endl;
+
 		for (size_t i = 0; i < cameras_id.size(); i++)
 		{
 			int current_id = ( -solveOutput.pathway(cameras_id(i)))-1;
-
-			std::cout << "cameras: " << cameras_id << std::endl;
 			std::cout << "cameras id: " << cameras_id(i) << std::endl;
-			std::cout << "pathway block: " << solveOutput.pathway << std::endl;
-			std::cout << "pathway block size: " << solveOutput.pathway.size() << std::endl;
 			std::cout << "current id: " << current_id << std::endl;
 
 			//get col from solveOutput.fixed
@@ -3104,7 +3107,7 @@ namespace P2SFM
 			//only care about the first ouput in this case
 			VectorVertical<MatrixType> estim = std::get<0>(EstimateView(data, pinv_meas, solveOutput.points, combined, current_id, count));
 
-			//std::cout << "estim :" << estim << std::endl;
+			std::cout << "estim :" << estim << std::endl;
 
 			if (estim.size() == 0)
 			{
@@ -3193,6 +3196,8 @@ namespace P2SFM
 		//retrieve both tuples
 		std::cout << "first path: " << first_path << "   last path: " << last_path << std::endl;
 		std::tie(known_points,known_cams, points_id, camera_id ) = EigenHelpers::GetPointsCamsPathway(solveOutput.pathway,first_path, last_path);
+		
+		
 		//known_points = std::ref(std::get<0>(std::get<0>(result)));
 		//std::cout << std::get<0>(std::get<0>(result)) << std::endl;
 
@@ -3255,9 +3260,15 @@ namespace P2SFM
 			}
 			else //reversed order
 			{
-				std::cout << "points id: " << points_id << std::endl << points_id.size() << std::endl;
+				if (first_path != 0)
+				{
+					std::cout << "fucko";
+				}
+
+				std::cout << "REESTIMATE POINTS" << std::endl;
 				new_output.points = ReEstimateAllPoints(data, pinv_meas, vis_copy, new_output, points_id);
 				std::cout << "camera id: " << camera_id << std::endl << camera_id.size() << std::endl;
+				std::cout << "REESTIMATE VIEWS" << std::endl;
 				new_output.cameras = ReEstimateAllViews(data, pinv_meas, vis_copy, new_output, camera_id);
 				std::cout << "reestimated all views" << std::endl;
 
@@ -3511,7 +3522,7 @@ namespace P2SFM
 			Vector<int> eligible_points = SearchEligiblePoints(options.eligibility_point[level_points], visibility, point_path, 
 				cam_path, rejected_points);
 
-			std::cout << "eligible points: " << eligible_points;
+			std::cout << "eligible points: " << eligible_points << std::endl;
 
 			if (eligible_points.size() != 0)
 			{
@@ -3522,6 +3533,7 @@ namespace P2SFM
 					level_points, rejected_points, new_projections, inliers, last_path, options);
 				std::cout << "POINTS ADDED: " << num_added_points << std::endl;
 
+				std::cout << "pathway: " << new_projections.pathway << std::endl;
 
 				if (num_added_points > 0)
 				{
