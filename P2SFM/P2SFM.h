@@ -3613,10 +3613,37 @@ namespace P2SFM
 	}
 
 
+	/*
+	Main function that put together all the pieces, just need to provide it with the original image measurements(2f by n matrix
+	where missing data are[0; 0], which can be sparse), the images sizes(used to find the initial problem) and some options.
+	
+	Input:
+		* measurements : Original image coordinates(2FxN sparse matrix where missing data are[0; 0])
+		* image_size : Size of the images, used to compute the pyramidal visibility scores(2xF)
+		* centers : Principal points coordinates for each camera(2xF)
+		* options : Structure containing options(must be initialized by ppsfm_options to contains all necessary fields)
+	Output :
+		* models : A cell of structures(one for each model) with the following fields :
+			-inliers : Inliers matrix binary mask(FxN)
+			-cameras : Projective estimation of the cameras that has been completed(3Fx4)
+			-timings : Timings of the four steps of the reconstruction
+	        -points : Projective estimation of the points that has been completed(4xN)
+			-pathway : Array containing the order in which views(negative) and points(positive) has been added(1 x k, k <= F + N)
+			-fixed : Cell containing arrays of the points or views used in the constraints when adding views and points(1 x F + N)
+	* data : Structure containing all data in the following fields :
+			-visible : Visibility matrix binary mask(FxN)
+			-data : Data matrix used for computations
+	        -norm_meas : Normalized homogeneous image projection coordinates(3FxN)
+			-normalisations : Normalisation transformation for each camera stacked vertically(3Fx3)
+			-img_meas : Unnormaliazed homogeneous measurements of the projections, used for computing errors and scores(3FxN)
+			-pinv_meas : Matrix containing the data for elimination of projective depths,
+	                    cross - product matrix or pseudo - inverse of the of the normalized homogeneous coordinates(Fx3N)
+			-ignored_pts : Binary mask indicated points removed from the reconstruction due to not having enought projections(1xN)*/
 	template <typename MatrixType, typename IndexType>
 	std::tuple< std::vector<std::tuple<P2SFM::ViewsPointsProjections<MatrixType, IndexType>,
 		P2SFM::ViewsPointsProjections<MatrixType, IndexType>, MatrixColSparse<MatrixType, IndexType> >>,	//first input vector of initial_proj/final_proj/inliers
-		MatrixColSparse<MatrixType, IndexType>	//data matrix 
+		std::tuple<MatrixDynamicDense<bool>, MatrixColSparse<MatrixType, IndexType>, MatrixColSparse<MatrixType, IndexType>,
+		MatrixColSparse<MatrixType, IndexType>, MatrixColSparse<MatrixType, IndexType>, MatrixColSparse<MatrixType, IndexType>> 	//data matrix 
 	>
 		Main(MatrixColSparse<MatrixType, IndexType>& measurements,
 		const MatrixDynamicDense<MatrixType>& centerInput,
@@ -3752,7 +3779,7 @@ namespace P2SFM
 			}
 		}
 
-		return { models,data };
+		return { models, {visibility,data,norm_meas,normalisations,hom_measurements,pinv_meas } };
 
 	}
 }
