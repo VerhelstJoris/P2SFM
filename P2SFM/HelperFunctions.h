@@ -4,7 +4,7 @@
 #include <Eigen/Dense>
 
 #include <iostream>
-#include <mat.h>;
+#include <mat.h>
 #include "P2SFM.h"
 
 
